@@ -7,6 +7,9 @@ from typing import Any, Callable, Optional
 import numpy as np
 
 from egologqa.artifacts import (
+    write_blur_debug_csv,
+    write_blur_evidence_frames,
+    write_depth_debug_csv,
     write_drop_timeline,
     write_exposure_debug_csv,
     write_report_markdown,
@@ -300,6 +303,9 @@ def analyze_file(
         depth_frames_by_pos: dict[int, Any] = {}
         rgb_decode_errors: dict[str, int] = {}
         depth_decode_errors: dict[str, int] = {}
+        rgb_decode_error_by_pos: dict[int, str] = {}
+        depth_decode_error_by_pos: dict[int, str] = {}
+        depth_non_uint16_positions: list[int] = []
         rgb_targets = set(sampled_rgb_indices)
         sample_pos_by_rgb_idx: dict[int, list[int]] = {}
         for pos, idx in enumerate(sampled_rgb_indices):
@@ -323,9 +329,10 @@ def analyze_file(
                             for pos in sample_pos_by_rgb_idx.get(rgb_valid_idx, []):
                                 rgb_frames_by_pos[pos] = frame
                         else:
-                            rgb_decode_errors[err or "RGB_DECODE_FAIL"] = (
-                                rgb_decode_errors.get(err or "RGB_DECODE_FAIL", 0) + 1
-                            )
+                            code = err or "RGB_DECODE_FAIL"
+                            rgb_decode_errors[code] = rgb_decode_errors.get(code, 0) + 1
+                            for pos in sample_pos_by_rgb_idx.get(rgb_valid_idx, []):
+                                rgb_decode_error_by_pos[pos] = code
             elif rec.topic == selected.depth_topic:
                 t_ns, _, _ = extract_stamp_ns(rec.msg, rec.log_time_ns)
                 if t_ns > 0:
@@ -336,9 +343,12 @@ def analyze_file(
                             for pos in sample_pos_by_depth_idx.get(depth_valid_idx, []):
                                 depth_frames_by_pos[pos] = frame
                         else:
-                            depth_decode_errors[err or "DEPTH_PNG_IMDECODE_FAIL"] = (
-                                depth_decode_errors.get(err or "DEPTH_PNG_IMDECODE_FAIL", 0) + 1
-                            )
+                            code = err or "DEPTH_PNG_IMDECODE_FAIL"
+                            depth_decode_errors[code] = depth_decode_errors.get(code, 0) + 1
+                            for pos in sample_pos_by_depth_idx.get(depth_valid_idx, []):
+                                depth_decode_error_by_pos[pos] = code
+                                if code == "DEPTH_UNEXPECTED_DTYPE":
+                                    depth_non_uint16_positions.append(pos)
 
         sampled_count = len(sampled_rgb_indices)
         decoded_rgb_positions = sorted(rgb_frames_by_pos.keys())
@@ -368,6 +378,21 @@ def analyze_file(
 
         report["metrics"].update(rgb_metrics)
         report["metrics"].update(depth_metrics)
+        if "blur_valid_frame_count" not in rgb_metrics:
+            report["metrics"]["blur_valid_frame_count"] = len(decoded_rgb_frames)
+        if "exposure_valid_frame_count" not in rgb_metrics:
+            report["metrics"]["exposure_valid_frame_count"] = len(exposure_rows)
+
+        rgb_decode_attempt_count = sampled_count
+        rgb_decode_success_count = len(decoded_rgb_positions)
+        depth_decode_attempt_count = len(depth_index_by_sample_pos)
+        depth_decode_success_count = len(decoded_depth_positions)
+
+        report["metrics"]["rgb_decode_attempt_count"] = rgb_decode_attempt_count
+        report["metrics"]["rgb_decode_success_count"] = rgb_decode_success_count
+        report["metrics"]["depth_decode_attempt_count"] = depth_decode_attempt_count
+        report["metrics"]["depth_decode_success_count"] = depth_decode_success_count
+        report["metrics"]["depth_valid_frame_count"] = len(decoded_depth_frames)
 
         rgb_decode_supported = len(decoded_rgb_positions) > 0
         depth_decode_supported = len(decoded_depth_positions) > 0
@@ -398,6 +423,18 @@ def analyze_file(
                     {"error_counts": depth_decode_errors},
                 )
             )
+        if depth_non_uint16_positions:
+            errors.append(
+                _error(
+                    "WARN",
+                    "DEPTH_DTYPE_NON_UINT16_SEEN",
+                    "Decoded depth samples included non-uint16 dtype.",
+                    {
+                        "count": len(depth_non_uint16_positions),
+                        "first_sample_i": min(depth_non_uint16_positions),
+                    },
+                )
+            )
         for compute_error in exposure_compute_errors:
             errors.append(
                 _error(
@@ -407,11 +444,25 @@ def analyze_file(
                     compute_error,
                 )
             )
+        if report["metrics"].get("blur_valid_frame_count", 0) == 0:
+            errors.append(
+                _error(
+                    "WARN",
+                    "BLUR_UNAVAILABLE_NO_DECODE",
+                    "Blur metrics unavailable because no valid decoded RGB frames were available.",
+                    {
+                        "rgb_decode_attempt_count": rgb_decode_attempt_count,
+                        "rgb_decode_success_count": rgb_decode_success_count,
+                    },
+                )
+            )
 
         if cfg.debug.export_exposure_csv and rgb_decode_supported:
             if exposure_rows:
                 exposure_csv_path = write_exposure_debug_csv(exposure_rows, output_dir)
-                report["metrics"]["exposure_debug_csv_path"] = _relative_path(exposure_csv_path, output_dir)
+                report["metrics"]["exposure_debug_csv_path"] = _relative_path(
+                    exposure_csv_path, output_dir
+                )
                 if report["metrics"]["exposure_debug_csv_path"] is None:
                     errors.append(
                         _error(
@@ -435,17 +486,145 @@ def analyze_file(
                 )
                 report["metrics"]["exposure_debug_csv_path"] = None
 
+        blur_value_by_pos: dict[int, float] = {}
+        blur_roi_margin_by_pos: dict[int, float] = {}
+        for row in exposure_rows:
+            pos = int(row.get("sample_i", -1))
+            if pos < 0:
+                continue
+            if row.get("blur_value") is not None:
+                blur_value_by_pos[pos] = float(row["blur_value"])
+            if row.get("blur_roi_margin_ratio") is not None:
+                blur_roi_margin_by_pos[pos] = float(row["blur_roi_margin_ratio"])
+
+        blur_rows: list[dict[str, Any]] = []
+        blur_threshold = report["metrics"].get("blur_threshold")
+        for pos in range(sampled_count):
+            decode_ok = pos in rgb_frames_by_pos
+            blur_value = blur_value_by_pos.get(pos)
+            row: dict[str, Any] = {
+                "sample_i": pos,
+                "t_ms": float(sampled_rgb_times_ms[pos]),
+                "roi_margin_ratio": float(
+                    blur_roi_margin_by_pos.get(pos, cfg.thresholds.blur_roi_margin_ratio)
+                ),
+                "decode_ok": int(decode_ok),
+                "blur_value": blur_value,
+                "blur_threshold": blur_threshold,
+                "blur_ok": None,
+                "decode_error_code": rgb_decode_error_by_pos.get(pos, ""),
+            }
+            if decode_ok and blur_value is not None and blur_threshold is not None:
+                row["blur_ok"] = int(bool(blur_ok[pos]))
+            blur_rows.append(row)
+
+        depth_rows: list[dict[str, Any]] = []
+        for pos in sorted(depth_index_by_sample_pos.keys()):
+            decode_ok = pos in depth_frames_by_pos
+            frame = depth_frames_by_pos.get(pos)
+            depth_row: dict[str, Any] = {
+                "sample_i": pos,
+                "t_ms": float(sampled_rgb_times_ms[pos]),
+                "decode_ok": int(decode_ok),
+                "invalid_ratio": None,
+                "min_depth": None,
+                "max_depth": None,
+                "dtype": "",
+                "error_code": depth_decode_error_by_pos.get(pos, ""),
+            }
+            if decode_ok and frame is not None:
+                depth_row["invalid_ratio"] = float(np.mean(frame == 0))
+                depth_row["min_depth"] = int(np.min(frame))
+                depth_row["max_depth"] = int(np.max(frame))
+                depth_row["dtype"] = str(frame.dtype)
+            depth_rows.append(depth_row)
+
+        if cfg.debug.export_blur_csv:
+            blur_csv_path = write_blur_debug_csv(blur_rows, output_dir)
+            report["metrics"]["blur_debug_csv_path"] = _relative_path(blur_csv_path, output_dir)
+            depth_csv_path = write_depth_debug_csv(depth_rows, output_dir)
+            report["metrics"]["depth_debug_csv_path"] = _relative_path(depth_csv_path, output_dir)
+
+        blur_warn_trigger = (
+            report["metrics"].get("blur_fail_ratio") is not None
+            and float(report["metrics"]["blur_fail_ratio"]) > cfg.thresholds.blur_fail_warn_ratio
+        )
+        should_export_evidence = cfg.debug.export_evidence_frames or (
+            cfg.debug.export_evidence_on_warn and blur_warn_trigger
+        )
+        if should_export_evidence:
+            blur_fail_evidence_rows: list[dict[str, Any]] = []
+            blur_pass_evidence_rows: list[dict[str, Any]] = []
+            for row in blur_rows:
+                if int(row.get("decode_ok", 0)) != 1:
+                    continue
+                if row.get("blur_value") is None or row.get("blur_ok") is None:
+                    continue
+                pos = int(row["sample_i"])
+                frame = rgb_frames_by_pos.get(pos)
+                if frame is None:
+                    continue
+                evidence_row = {
+                    "sample_i": pos,
+                    "t_ms": float(row["t_ms"]),
+                    "blur_value": float(row["blur_value"]),
+                    "frame": frame,
+                }
+                if int(row["blur_ok"]) == 0:
+                    blur_fail_evidence_rows.append(evidence_row)
+                else:
+                    blur_pass_evidence_rows.append(evidence_row)
+            fail_dir, pass_dir = write_blur_evidence_frames(
+                blur_fail_evidence_rows,
+                blur_pass_evidence_rows,
+                output_dir,
+                cfg.debug.evidence_frames_k,
+            )
+            report["metrics"]["blur_fail_frames_dir"] = _relative_path(fail_dir, output_dir)
+            report["metrics"]["blur_pass_frames_dir"] = _relative_path(pass_dir, output_dir)
+
         sampled_imu_acc_cov = (
             [imu_acc_cov[idx] for idx in sampled_rgb_indices] if imu_acc_cov is not None else None
         )
         sampled_imu_gyro_cov = (
             [imu_gyro_cov[idx] for idx in sampled_rgb_indices] if imu_gyro_cov is not None else None
         )
+        sync_available_globally = depth_timestamps_present and sampled_sync_deltas is not None
+        if not sync_available_globally and sampled_count > 0:
+            errors.append(
+                _error(
+                    "WARN",
+                    "SYNC_UNAVAILABLE_DEPTH_TIMESTAMPS_MISSING",
+                    "Sync evaluation unavailable because depth timestamps are missing.",
+                    {
+                        "depth_topic_present": depth_topic_present,
+                        "depth_timestamps_present": depth_timestamps_present,
+                        "sampled_rgb_count": sampled_count,
+                    },
+                )
+            )
+        elif sampled_sync_deltas is not None and len(sampled_sync_deltas) < sampled_count:
+            missing_positions = list(range(len(sampled_sync_deltas), sampled_count))
+            errors.append(
+                _error(
+                    "WARN",
+                    "SYNC_UNAVAILABLE_DEPTH_TIMESTAMPS_MISSING",
+                    "Sync evaluation unavailable for a subset of sampled frames.",
+                    {
+                        "sampled_rgb_count": sampled_count,
+                        "sync_delta_count": len(sampled_sync_deltas),
+                        "missing_count": len(missing_positions),
+                        "first_missing_sample_i": missing_positions[0] if missing_positions else None,
+                    },
+                )
+            )
         frame_flags = build_frame_flags(
             sampled_rgb_times_ms=sampled_rgb_times_ms,
             sampled_rgb_indices=sampled_rgb_indices,
             sync_deltas_ms=sampled_sync_deltas,
+            sync_fail_ms=cfg.thresholds.sync_fail_ms,
             sync_warn_ms=cfg.thresholds.sync_warn_ms,
+            sync_available_globally=sync_available_globally,
             drop_regions=drop_regions,
             imu_accel_coverage=sampled_imu_acc_cov,
             imu_gyro_coverage=sampled_imu_gyro_cov,
@@ -505,15 +684,17 @@ def analyze_file(
         )
         report["gate"] = gate
 
-        preview_paths = write_rgb_previews(rgb_frames_by_pos, output_dir)
+        preview_paths: list[str] = []
+        if cfg.debug.export_preview_frames:
+            preview_paths = write_rgb_previews(rgb_frames_by_pos, output_dir)
         plot_path = write_sync_histogram(sampled_sync_deltas, output_dir)
         drop_timeline_path = write_drop_timeline(rgb_col.times_ms, rgb_gap["gap_intervals_ms"], output_dir)
         if preview_paths:
             report["metrics"]["preview_count"] = len(preview_paths)
         if plot_path:
-            report["metrics"]["sync_histogram_path"] = plot_path
+            report["metrics"]["sync_histogram_path"] = _relative_path(plot_path, output_dir)
         if drop_timeline_path:
-            report["metrics"]["drop_timeline_path"] = drop_timeline_path
+            report["metrics"]["drop_timeline_path"] = _relative_path(drop_timeline_path, output_dir)
         _emit(progress_cb, "done", 1.0, f"Done ({gate['gate']})", {"gate": gate["gate"]})
     except Exception as exc:
         errors.append(
@@ -573,9 +754,10 @@ def _relative_path(path: str | None, output_dir: str | Path) -> str | None:
     if not path:
         return None
     try:
-        return str(Path(path).resolve().relative_to(Path(output_dir).resolve()))
+        rel = Path(path).resolve().relative_to(Path(output_dir).resolve())
+        return rel.as_posix()
     except Exception:
-        return str(path)
+        return str(path).replace("\\", "/")
 
 
 def _append_legacy_exposure_keys_warning(

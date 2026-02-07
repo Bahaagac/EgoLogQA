@@ -222,6 +222,128 @@ def write_exposure_debug_csv(
     return str(out_path)
 
 
+def write_blur_debug_csv(
+    blur_rows: list[dict[str, Any]],
+    output_dir: str | Path,
+) -> str | None:
+    if not blur_rows:
+        return None
+    debug_dir = Path(output_dir) / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    out_path = debug_dir / "blur_samples.csv"
+    rows = sorted(
+        blur_rows,
+        key=lambda r: int(r.get("sample_i", 0)),
+    )
+    fields = [
+        "sample_i",
+        "t_ms",
+        "roi_margin_ratio",
+        "decode_ok",
+        "blur_value",
+        "blur_threshold",
+        "blur_ok",
+        "decode_error_code",
+    ]
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            formatted = {key: _format_csv_value(row.get(key)) for key in fields}
+            writer.writerow(formatted)
+    return str(out_path)
+
+
+def write_depth_debug_csv(
+    depth_rows: list[dict[str, Any]],
+    output_dir: str | Path,
+) -> str | None:
+    if not depth_rows:
+        return None
+    debug_dir = Path(output_dir) / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    out_path = debug_dir / "depth_samples.csv"
+    rows = sorted(
+        depth_rows,
+        key=lambda r: int(r.get("sample_i", 0)),
+    )
+    fields = [
+        "sample_i",
+        "t_ms",
+        "decode_ok",
+        "invalid_ratio",
+        "min_depth",
+        "max_depth",
+        "dtype",
+        "error_code",
+    ]
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            formatted = {key: _format_csv_value(row.get(key)) for key in fields}
+            writer.writerow(formatted)
+    return str(out_path)
+
+
+def write_blur_evidence_frames(
+    blur_fail_rows: list[dict[str, Any]],
+    blur_pass_rows: list[dict[str, Any]],
+    output_dir: str | Path,
+    k: int,
+) -> tuple[str | None, str | None]:
+    if k <= 0:
+        return None, None
+    try:
+        import cv2
+    except Exception:
+        return None, None
+    debug_dir = Path(output_dir) / "debug"
+    fail_dir = debug_dir / "blur_fail_frames"
+    pass_dir = debug_dir / "blur_pass_frames"
+    fail_dir.mkdir(parents=True, exist_ok=True)
+    pass_dir.mkdir(parents=True, exist_ok=True)
+
+    fail_sel = sorted(
+        blur_fail_rows,
+        key=lambda row: (float(row.get("blur_value", 0.0)), int(row.get("sample_i", 0))),
+    )[:k]
+    pass_sel = sorted(
+        blur_pass_rows,
+        key=lambda row: (-float(row.get("blur_value", 0.0)), int(row.get("sample_i", 0))),
+    )[:k]
+
+    wrote_fail = _write_evidence_set(fail_sel, fail_dir, "fail", cv2)
+    wrote_pass = _write_evidence_set(pass_sel, pass_dir, "pass", cv2)
+
+    fail_path = str(fail_dir) if wrote_fail > 0 else None
+    pass_path = str(pass_dir) if wrote_pass > 0 else None
+    return fail_path, pass_path
+
+
+def _write_evidence_set(rows: list[dict[str, Any]], out_dir: Path, prefix: str, cv2_mod: Any) -> int:
+    wrote = 0
+    for rank, row in enumerate(rows, start=1):
+        frame = row.get("frame")
+        if frame is None:
+            continue
+        sample_i = int(row.get("sample_i", 0))
+        t_ms = float(row.get("t_ms", 0.0))
+        blur_value = float(row.get("blur_value", 0.0))
+        file_name = (
+            f"{prefix}_rank{rank:02d}_i{sample_i:04d}_t{t_ms:.0f}_blur{blur_value:.2f}.jpg"
+        )
+        out_path = out_dir / file_name
+        ok = cv2_mod.imwrite(
+            str(out_path),
+            frame,
+            [int(cv2_mod.IMWRITE_JPEG_QUALITY), 90],
+        )
+        if ok:
+            wrote += 1
+    return wrote
+
+
 def _format_csv_value(value: Any) -> Any:
     if isinstance(value, float):
         return f"{value:.6f}"

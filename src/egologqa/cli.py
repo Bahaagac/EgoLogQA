@@ -78,6 +78,21 @@ def main(argv: list[str] | None = None) -> int:
     print(f"ERROR ENTRIES ({len(error_entries)}):")
     for item in error_entries:
         print(f"- {item.get('code')}: {item.get('message')}")
+    metrics = result.report.get("metrics", {})
+    artifact_keys = [
+        ("report", str(result.report_path or result.output_path)),
+        ("sync_histogram_path", metrics.get("sync_histogram_path")),
+        ("drop_timeline_path", metrics.get("drop_timeline_path")),
+        ("exposure_debug_csv_path", metrics.get("exposure_debug_csv_path")),
+        ("blur_debug_csv_path", metrics.get("blur_debug_csv_path")),
+        ("depth_debug_csv_path", metrics.get("depth_debug_csv_path")),
+        ("blur_fail_frames_dir", metrics.get("blur_fail_frames_dir")),
+        ("blur_pass_frames_dir", metrics.get("blur_pass_frames_dir")),
+    ]
+    print("ARTIFACTS:")
+    for name, value in artifact_keys:
+        if value:
+            print(f"- {name}: {value}")
     print(
         json.dumps(
             {

@@ -25,7 +25,14 @@ def compute_rgb_pixel_metrics(
                 "blur_median": None,
                 "blur_threshold": None,
                 "blur_fail_ratio": None,
+                "blur_p10": None,
+                "blur_p50": None,
+                "blur_p90": None,
+                "blur_valid_frame_count": 0,
                 "exposure_bad_ratio": None,
+                "exposure_valid_frame_count": 0,
+                "exposure_bad_first_sample_i": None,
+                "exposure_bad_last_sample_i": None,
                 "low_clip_mean": None,
                 "low_clip_p95": None,
                 "high_clip_mean": None,
@@ -57,7 +64,14 @@ def compute_rgb_pixel_metrics(
                 "blur_median": None,
                 "blur_threshold": None,
                 "blur_fail_ratio": None,
+                "blur_p10": None,
+                "blur_p50": None,
+                "blur_p90": None,
+                "blur_valid_frame_count": 0,
                 "exposure_bad_ratio": None,
+                "exposure_valid_frame_count": 0,
+                "exposure_bad_first_sample_i": None,
+                "exposure_bad_last_sample_i": None,
                 "low_clip_mean": None,
                 "low_clip_p95": None,
                 "high_clip_mean": None,
@@ -110,7 +124,8 @@ def compute_rgb_pixel_metrics(
         blur_score: float | None = None
         try:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            blur_score = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+            blur_roi, blur_margin_used = _blur_roi(gray, thresholds.blur_roi_margin_ratio)
+            blur_score = float(cv2.Laplacian(blur_roi, cv2.CV_64F).var())
             roi, margin_used = _exposure_roi(gray, thresholds.exposure_roi_margin_ratio)
 
             low_clip = float(np.mean(roi <= thresholds.low_clip_pixel_value))
@@ -172,6 +187,8 @@ def compute_rgb_pixel_metrics(
                     "sample_i": int(sample_i),
                     "t_ms": float(t_ms),
                     "roi_margin_ratio": float(margin_used),
+                    "blur_roi_margin_ratio": float(blur_margin_used),
+                    "blur_value": blur_score,
                     "low_clip": low_clip,
                     "high_clip": high_clip,
                     "p01": p01,
@@ -199,17 +216,20 @@ def compute_rgb_pixel_metrics(
     valid_blur_scores = [x for x in blur_scores if x is not None]
     if valid_blur_scores:
         blur_arr = np.asarray(valid_blur_scores, dtype=np.float64)
-        blur_threshold = max(
-            float(np.percentile(blur_arr, 10)),
-            float(thresholds.blur_threshold_min),
-        )
+        blur_threshold = float(thresholds.blur_threshold_min)
         blur_bad = [x < blur_threshold for x in valid_blur_scores]
         blur_fail_ratio = float(np.mean(blur_bad))
         blur_median = float(np.median(blur_arr))
+        blur_p10 = float(np.percentile(blur_arr, 10))
+        blur_p50 = float(np.percentile(blur_arr, 50))
+        blur_p90 = float(np.percentile(blur_arr, 90))
     else:
         blur_threshold = None
         blur_fail_ratio = None
         blur_median = None
+        blur_p10 = None
+        blur_p50 = None
+        blur_p90 = None
     blur_ok: list[bool] = []
     for score in blur_scores:
         if score is None or blur_threshold is None:
@@ -217,12 +237,29 @@ def compute_rgb_pixel_metrics(
         else:
             blur_ok.append(score >= blur_threshold)
 
+    exposure_bad_sample_indices = [
+        int(row["sample_i"])
+        for row in exposure_rows
+        if int(row.get("exposure_bad", 0)) == 1
+    ]
+
     metrics = {
         "blur_median": blur_median,
         "blur_threshold": blur_threshold,
         "blur_fail_ratio": blur_fail_ratio,
+        "blur_p10": blur_p10,
+        "blur_p50": blur_p50,
+        "blur_p90": blur_p90,
+        "blur_valid_frame_count": len(valid_blur_scores),
         "exposure_bad_ratio": (
             float(np.mean(exposure_bad_values)) if exposure_bad_values else None
+        ),
+        "exposure_valid_frame_count": len(exposure_bad_values),
+        "exposure_bad_first_sample_i": (
+            min(exposure_bad_sample_indices) if exposure_bad_sample_indices else None
+        ),
+        "exposure_bad_last_sample_i": (
+            max(exposure_bad_sample_indices) if exposure_bad_sample_indices else None
         ),
         "low_clip_mean": (
             float(np.mean(low_clip_values)) if low_clip_values else None
@@ -296,6 +333,18 @@ def compute_depth_pixel_metrics(
 
 
 def _exposure_roi(gray: np.ndarray, margin_ratio: float) -> tuple[np.ndarray, float]:
+    h, w = gray.shape[:2]
+    margin = int(min(h, w) * margin_ratio)
+    y0 = margin
+    y1 = h - margin
+    x0 = margin
+    x1 = w - margin
+    if y1 <= y0 or x1 <= x0:
+        return gray, 0.0
+    return gray[y0:y1, x0:x1], float(margin_ratio)
+
+
+def _blur_roi(gray: np.ndarray, margin_ratio: float) -> tuple[np.ndarray, float]:
     h, w = gray.shape[:2]
     margin = int(min(h, w) * margin_ratio)
     y0 = margin

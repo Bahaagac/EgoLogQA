@@ -26,4 +26,6 @@ def decode_depth_message(msg: Any) -> tuple[np.ndarray | None, str | None]:
         return None, "DEPTH_PNG_IMDECODE_FAIL"
     if depth.dtype != np.uint16:
         return None, "DEPTH_UNEXPECTED_DTYPE"
+    if depth.ndim != 2:
+        return None, "DEPTH_UNEXPECTED_SHAPE"
     return depth, None

@@ -87,6 +87,10 @@ def _validate_config(config: QAConfig) -> None:
         raise ValueError("thresholds.exposure_roi_margin_ratio must be >= 0")
     if config.thresholds.exposure_roi_margin_ratio >= 0.5:
         raise ValueError("thresholds.exposure_roi_margin_ratio must be < 0.5")
+    if config.thresholds.blur_roi_margin_ratio < 0:
+        raise ValueError("thresholds.blur_roi_margin_ratio must be >= 0")
+    if config.thresholds.blur_roi_margin_ratio >= 0.5:
+        raise ValueError("thresholds.blur_roi_margin_ratio must be < 0.5")
     if not (0 <= config.thresholds.low_clip_pixel_value <= 255):
         raise ValueError("thresholds.low_clip_pixel_value must be in [0, 255]")
     if not (0 <= config.thresholds.high_clip_pixel_value <= 255):
@@ -101,3 +105,5 @@ def _validate_config(config: QAConfig) -> None:
         raise ValueError("thresholds.median_bright must be in [0, 255]")
     if not (0.0 <= config.thresholds.dynamic_range_min <= 255.0):
         raise ValueError("thresholds.dynamic_range_min must be in [0, 255]")
+    if not (1 <= config.debug.evidence_frames_k <= 64):
+        raise ValueError("debug.evidence_frames_k must be in [1, 64]")

@@ -20,7 +20,9 @@ thresholds:
   sync_warn_ms: 16.0
   sync_fail_ms: 33.0
   imu_window_ms: 20.0
+  # Tuned for 1080p MicroAGI00 streams. Retune for different resolutions.
   blur_threshold_min: 80.0
+  blur_roi_margin_ratio: 0.05
   # Legacy keys kept for backward compatibility only.
   # They are not used by the v1.3 exposure classifier.
   low_clip_threshold: 0.05
@@ -54,3 +56,8 @@ decode:
   warn_on_depth_pixel_decode_failure: false
 debug:
   export_exposure_csv: true
+  export_blur_csv: true
+  export_evidence_frames: false
+  export_evidence_on_warn: true
+  evidence_frames_k: 16
+  export_preview_frames: true

@@ -48,6 +48,7 @@ class ThresholdsConfig:
     sync_fail_ms: float = 33.0
     imu_window_ms: float = 20.0
     blur_threshold_min: float = 80.0
+    blur_roi_margin_ratio: float = 0.05
     low_clip_threshold: float = 0.05
     high_clip_threshold: float = 0.05
     contrast_min: float = 25.0
@@ -98,6 +99,11 @@ class DecodeConfig:
 @dataclass
 class DebugConfig:
     export_exposure_csv: bool = True
+    export_blur_csv: bool = True
+    export_evidence_frames: bool = False
+    export_evidence_on_warn: bool = True
+    evidence_frames_k: int = 16
+    export_preview_frames: bool = True
 
 
 @dataclass
