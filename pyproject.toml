@@ -1,0 +1,32 @@
+[project]
+name = "egologqa"
+version = "0.1.0"
+description = "Deterministic QC gate and segment extractor for ROS2 MCAP logs."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "mcap-ros2-support==0.5.5",
+  "numpy==1.26.4",
+  "opencv-python==4.10.0.84",
+  "PyYAML==6.0.2",
+  "streamlit==1.41.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.3.4",
+]
+
+[project.scripts]
+egologqa = "egologqa.cli:main"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

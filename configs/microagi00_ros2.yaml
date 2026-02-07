@@ -1,0 +1,56 @@
+topics:
+  mode: explicit
+  rgb_topic: /camera/color/image_raw/compressed
+  depth_topic: /camera/depth/image_raw/compressedDepth
+  imu_accel_topic: /camera/imu/accel/sample
+  imu_gyro_topic: /camera/imu/gyro/sample
+  auto:
+    rgb_regex: color.*compressed
+    depth_regex: depth.*compressedDepth
+    imu_regex: imu.*sample
+expected_rates:
+  image_hz: 30.0
+  imu_hz: 200.0
+sampling:
+  rgb_stride: 5
+  max_rgb_frames: 12000
+thresholds:
+  image_gap_factor: 2.5
+  imu_gap_factor: 5.0
+  sync_warn_ms: 16.0
+  sync_fail_ms: 33.0
+  imu_window_ms: 20.0
+  blur_threshold_min: 80.0
+  # Legacy keys kept for backward compatibility only.
+  # They are not used by the v1.3 exposure classifier.
+  low_clip_threshold: 0.05
+  high_clip_threshold: 0.05
+  contrast_min: 25.0
+  low_clip_pixel_value: 5
+  high_clip_pixel_value: 250
+  exposure_roi_margin_ratio: 0.05
+  low_clip_warn: 0.20
+  high_clip_warn: 0.20
+  dynamic_range_min: 10.0
+  median_dark: 40.0
+  median_bright: 215.0
+  depth_invalid_threshold: 0.35
+  drop_warn_ratio: 0.05
+  drop_fail_ratio: 0.10
+  imu_missing_warn_ratio: 0.10
+  blur_fail_warn_ratio: 0.20
+  exposure_bad_warn_ratio: 0.20
+  depth_invalid_mean_warn: 0.35
+segments:
+  max_gap_fill_ms: 200.0
+  min_segment_seconds: 5.0
+gate:
+  fail_if_no_segments_min_duration_s: 30.0
+  gate_warn_floor_error_codes:
+    - TIMESTAMP_OUT_OF_ORDER_HIGH
+integrity:
+  out_of_order_warn_ratio: 0.001
+decode:
+  warn_on_depth_pixel_decode_failure: false
+debug:
+  export_exposure_csv: true
