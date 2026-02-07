@@ -98,14 +98,52 @@ Exit codes:
 ## Streamlit UI
 
 ```bash
-streamlit run app/streamlit_app.py
+./.venv/bin/streamlit run app/streamlit_app.py
 ```
 
-The UI runs analysis in synchronous chunks and updates progress continuously.
+Run from repo root so local `.streamlit/` config is loaded.
 
-Use the mode selector:
+The default UI is kiosk-style with two tabs:
 
-- `Analyze MCAP`: upload and run analysis.
-- `Open Output Directory`: load an existing `report.json` and artifacts without re-running analysis.
+- One instruction line
+- `Hugging Face` tab:
+  - `.mcap` dropdown (with file-size labels)
+  - tab-specific Analyze button
+- `Local disk` tab:
+  - folder selector (`~/Downloads`, `~/Desktop`, `~/.cache/egologqa`, `Last used`, or `Other...`)
+  - `.mcap` dropdown (with file-size labels)
+  - tab-specific Analyze button
+- Progress + full same-page results after each run
 
-For large MCAP files, run CLI first and inspect results with `Open Output Directory`.
+No dataset/revision/prefix/token/cache controls are shown by default.
+Both source dropdowns use placeholder-first behavior (`Select an MCAP file`) and `Analyze` is disabled until you explicitly pick a file.
+Local disk mode analyzes the selected file in place (no browser upload and no local-file copy into run output).
+
+Defaults:
+
+- HF dataset id: `MicroAGI-Labs/MicroAGI00`
+- HF revision: `main`
+- HF prefix: `raw_mcaps/`
+- HF cache dir: `~/.cache/egologqa/hf_mcaps`
+- Runs dir: `~/.cache/egologqa/runs`
+
+Env overrides:
+
+- `EGOLOGQA_HF_REPO_ID`
+- `EGOLOGQA_HF_REVISION`
+- `EGOLOGQA_HF_PREFIX`
+- `EGOLOGQA_HF_CACHE_DIR`
+- `EGOLOGQA_RUNS_DIR`
+- `EGOLOGQA_LOCAL_MAX_FILES` (default `500`)
+- `HF_TOKEN` (optional, not shown in UI)
+
+Developer-only advanced panel:
+
+- Set `EGOLOGQA_UI_ADVANCED=1`
+- Enables manual Hugging Face list refresh and error details
+
+Streamlit log noise suppression:
+
+- `.streamlit/config.toml` sets logger level to `error`
+- `.streamlit/secrets.toml` is intentionally present (empty)
+- Fallback launch flag if needed: `--logger.level=error`
