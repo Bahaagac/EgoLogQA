@@ -6,4 +6,6 @@ __pycache__/
 *.egg-info/
 report.json/
 out/
+/report_out/
+/tmp_reports/
 .DS_Store

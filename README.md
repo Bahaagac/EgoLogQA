@@ -52,6 +52,14 @@ Output directory contains:
 - `plots/drop_timeline.png` (when RGB timestamps are available)
 - `debug/exposure_samples.csv` (when RGB decode succeeds and debug export is enabled)
 
+## Git Hygiene
+
+Runtime analysis artifacts are intentionally local and not tracked by git.
+
+- Ignored runtime output directories include `report_out/` and `out/`.
+- Generated previews (`previews/*.png`), plots, CSV debug files, and reports should not be committed.
+- If you need a static artifact for documentation, copy it intentionally into a dedicated non-runtime location (for example `examples/`).
+
 Exit codes:
 
 - `0` PASS
