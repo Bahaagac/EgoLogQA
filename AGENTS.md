@@ -87,6 +87,7 @@ Practical rule:
 Defined in `pyproject.toml`:
 - Python: `>=3.11,<3.12`
 - `mcap-ros2-support==0.5.5`
+- `huggingface_hub==0.27.1`
 - `numpy==1.26.4`
 - `opencv-python==4.10.0.84`
 - `PyYAML==6.0.2`
@@ -136,30 +137,66 @@ File:
 - `app/streamlit_app.py`
 
 Behavior:
-- Two modes:
-  - `Analyze MCAP` (upload + run)
-  - `Open Output Directory` (load existing `report.json` and artifacts)
+- Kiosk default mode:
+  - instruction line
+  - `Hugging Face` tab with placeholder-first `.mcap` selectbox (size-labeled)
+  - tab-specific Analyze button for Hugging Face source
+  - `Local disk` tab with folder selector + placeholder-first `.mcap` selectbox (size-labeled)
+  - tab-specific Analyze button for Local disk source
+  - same-page full results rendering after each run
+  - each tab Analyze is disabled until its source selection is non-placeholder
+- Hidden advanced panel appears only when `EGOLOGQA_UI_ADVANCED=1`:
+  - manual Hugging Face list refresh
+  - additional error details
 - Synchronous analysis with progress callback updates
 - No threaded worker/queue model
 - Uses:
   - `st.progress`
   - `st.status`
   - placeholders for partial updates
+- Hugging Face source behavior:
+  - fixed defaults:
+    - repo: `MicroAGI-Labs/MicroAGI00`
+    - revision: `main`
+    - prefix: `raw_mcaps/`
+  - dataset file browser via `huggingface_hub` repo tree listing
+  - deterministic `.mcap` list sorted by path, default prefix `raw_mcaps/`
+  - persistent cache (default `~/.cache/egologqa/hf_mcaps`)
+  - cache hit reuses local file; cache miss downloads then reuses
+  - token from `HF_TOKEN` env var (not rendered in UI)
+  - env overrides:
+    - `EGOLOGQA_HF_REPO_ID`
+    - `EGOLOGQA_HF_REVISION`
+    - `EGOLOGQA_HF_PREFIX`
+    - `EGOLOGQA_HF_CACHE_DIR`
+    - `EGOLOGQA_RUNS_DIR`
+  - listing cache uses Streamlit cache TTL (300s) plus session-state reuse
+- Local disk source behavior:
+  - no browser upload used
+  - file listing from selected folder (non-recursive `.mcap` only)
+  - deterministic sort by `(name.lower(), size_bytes, mtime_ns, path)`
+  - listing capped by `EGOLOGQA_LOCAL_MAX_FILES` (default `500`)
+  - manual local list refresh button increments a local nonce to refresh same-folder cache
+  - selected local file analyzed in place (no copy to run directory)
+
+Streamlit runtime config files:
+- `.streamlit/config.toml`:
+  - logger level set to `error` to suppress non-critical startup noise
+- `.streamlit/secrets.toml`:
+  - intentionally present (empty) to avoid missing-secrets chatter
 
 Displayed sections:
-- Gate status
-- Stream summary
-- Key metrics including integrity/vision coverage and exposure diagnostics
-- Integrity segments table
-- Channel summary table
-- Sync histogram image (if produced)
-- Drop timeline image (if produced)
-- RGB preview gallery
+- Gate status and recommended action
+- Key metrics including integrity/vision coverage and exposure/blur/depth quality
+- Segments table
 - Errors table
+- Artifact paths and available images (plots, previews, evidence frames)
+- Raw report expander
 
 UX wording used:
 - "Integrity Segments" (not "core segments")
-- For large MCAP files: run CLI first, then inspect via `Open Output Directory`.
+- Idle state shown as plain status text (no perpetual running spinner).
+- run outputs default to `~/.cache/egologqa/runs`, with `latest_run.txt` pointer.
 
 ## 7) Report schema contract (top-level keys are fixed)
 
@@ -658,8 +695,8 @@ If modifying reader behavior:
 
 1. Runtime artifacts are ignored by policy (`report_out/`, `out/`, `tmp_reports/`). If a static demo artifact is needed, copy it intentionally into a dedicated tracked folder (for example `examples/`).
 2. `uv.lock` is very small; validate lock strategy if strict reproducibility across machines is required.
-3. Streamlit currently writes to fixed output directory by default (`out/streamlit`); concurrent sessions may collide.
-4. `sync_ok` is currently false when depth timestamps missing; long-duration recordings with no depth can fail via no-segments path even if RGB/IMU are healthy. Keep in mind when broadening dataset support.
+3. Kiosk Streamlit writes run outputs under `~/.cache/egologqa/runs` by default; consider optional retention/cleanup policy for long-running usage.
+4. Hidden advanced panel is env-gated (`EGOLOGQA_UI_ADVANCED=1`); if operator tooling grows, consider splitting kiosk and admin pages.
 
 ## 24) Quick file index (where to edit what)
 
