@@ -1,7 +1,7 @@
 # EgoLogQA Master Documentation and Technical Specification
 
 Last audited: 2026-02-07 (local workspace state)  
-Repository root: `/Users/bahaagac/Documents/New project 2`  
+Repository root: repo root (`.`)  
 Audited branch: `main`  
 Audited commit: `1bb95f30e6da377f5cfc12b9e69bb3b2c96bdbb3`
 
@@ -1536,4 +1536,3 @@ Use this to validate reconstruction equivalence:
 - Interfaces:
   - `src/egologqa/cli.py`
   - `app/streamlit_app.py`
-

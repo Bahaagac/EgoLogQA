@@ -61,3 +61,7 @@ debug:
   export_evidence_on_warn: true
   evidence_frames_k: 16
   export_preview_frames: true
+  # Optional additive diagnostics (off by default).
+  write_evidence_manifest: false
+  write_annotated_evidence: false
+  benchmarks_enabled: false

@@ -3,7 +3,7 @@
 Project knowledge base for agents and developers working on EgoLogQA.
 
 Last updated: 2026-02-07  
-Repository root: `/Users/bahaagac/Documents/New project 2`  
+Repository root: repo root (`.`)  
 Current branch: `main`  
 Observed HEAD commit: `29933c4b1c0abad3786afd8e62e94edee4932f87`
 
@@ -75,7 +75,7 @@ Observed on this machine:
   - executable: `/Library/Developer/CommandLineTools/usr/bin/python3`
   - PyYAML: `6.0.3` (system site-packages)
 - project venv Python:
-  - executable: `/Users/bahaagac/Documents/New project 2/.venv/bin/python`
+  - executable: `.venv/bin/python`
   - PyYAML: `6.0.2` (matches pinned dependency)
 
 Practical rule:

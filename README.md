@@ -55,8 +55,18 @@ Output directory contains:
 - `debug/depth_samples.csv` (when blur/depth debug CSV export is enabled)
 - `debug/blur_fail_frames/*.jpg` (when evidence export is enabled or blur WARN auto-export triggers)
 - `debug/blur_pass_frames/*.jpg` (when evidence export is enabled or blur WARN auto-export triggers)
+- `debug/blur_fail_frames_annotated/*.jpg` (when `debug.write_annotated_evidence=true`)
+- `debug/blur_pass_frames_annotated/*.jpg` (when `debug.write_annotated_evidence=true`)
+- `debug/evidence_manifest.json` (when `debug.write_evidence_manifest=true`)
+- `debug/benchmarks.json` (when `--bench` or `debug.benchmarks_enabled=true`)
 
 All artifact paths stored in `report.json` are output-directory-relative POSIX paths (for example `plots/sync_histogram.png`).
+
+Optional additive diagnostics:
+
+- `egologqa analyze --bench ...` writes benchmark timings to `debug/benchmarks.json`.
+- `debug.write_evidence_manifest` writes a deterministic evidence manifest.
+- `debug.write_annotated_evidence` writes annotated evidence copies without modifying raw evidence frames.
 
 ## Blur Metric Contract
 
@@ -141,6 +151,14 @@ Developer-only advanced panel:
 
 - Set `EGOLOGQA_UI_ADVANCED=1`
 - Enables manual Hugging Face list refresh and error details
+
+## Validation Pack
+
+Deterministic validation tooling lives under `validation/`:
+
+- `validation/run_validation.py`
+- `validation/summarize_results.py`
+- `validation/labels_template.csv`
 
 Streamlit log noise suppression:
 

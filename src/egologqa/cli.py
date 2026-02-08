@@ -21,6 +21,11 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--depth-topic", default=None)
     analyze.add_argument("--imu-accel-topic", default=None)
     analyze.add_argument("--imu-gyro-topic", default=None)
+    analyze.add_argument(
+        "--bench",
+        action="store_true",
+        help="Write debug/benchmarks.json and include benchmarks_path in metrics.",
+    )
     return parser
 
 
@@ -40,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     try:
         config = load_config(args.config)
+        if args.bench:
+            config.debug.benchmarks_enabled = True
     except Exception as exc:
         report = empty_report(
             input_path=args.input,
@@ -88,6 +95,10 @@ def main(argv: list[str] | None = None) -> int:
         ("depth_debug_csv_path", metrics.get("depth_debug_csv_path")),
         ("blur_fail_frames_dir", metrics.get("blur_fail_frames_dir")),
         ("blur_pass_frames_dir", metrics.get("blur_pass_frames_dir")),
+        ("blur_fail_frames_annotated_dir", metrics.get("blur_fail_frames_annotated_dir")),
+        ("blur_pass_frames_annotated_dir", metrics.get("blur_pass_frames_annotated_dir")),
+        ("evidence_manifest_path", metrics.get("evidence_manifest_path")),
+        ("benchmarks_path", metrics.get("benchmarks_path")),
     ]
     print("ARTIFACTS:")
     for name, value in artifact_keys:

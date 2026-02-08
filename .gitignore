@@ -9,3 +9,6 @@ out/
 /report_out/
 /tmp_reports/
 .DS_Store
+validation/runs/
+validation/results/
+validation/labels.csv

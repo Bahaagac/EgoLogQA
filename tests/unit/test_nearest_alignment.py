@@ -17,3 +17,10 @@ def test_nearest_indices_basic() -> None:
     ref = np.array([0.0, 10.0, 30.0], dtype=np.float64)
     out = nearest_indices(q, ref)
     assert out.tolist() == [0, 1, 2]
+
+
+def test_nearest_indices_tie_prefers_left() -> None:
+    q = np.array([5.0], dtype=np.float64)
+    ref = np.array([0.0, 10.0], dtype=np.float64)
+    out = nearest_indices(q, ref)
+    assert out.tolist() == [0]
