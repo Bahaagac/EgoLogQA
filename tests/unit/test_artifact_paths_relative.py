@@ -47,6 +47,10 @@ def test_artifact_paths_are_output_relative_posix(tmp_path: Path) -> None:
         "depth_debug_csv_path",
         "blur_fail_frames_dir",
         "blur_pass_frames_dir",
+        "blur_fail_frames_annotated_dir",
+        "blur_pass_frames_annotated_dir",
+        "evidence_manifest_path",
+        "benchmarks_path",
     ]:
         value = metrics.get(key)
         if not value:

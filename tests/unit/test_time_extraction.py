@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from egologqa.time import extract_stamp_ns
+from egologqa.time import extract_header_stamp_ns, extract_stamp_ns
 from tests.conftest import FakeMessage, FakeHeader, FakeStamp
 
 
@@ -26,3 +26,23 @@ def test_extract_returns_invalid_when_both_invalid() -> None:
     assert t_ns == 0
     assert source == "invalid"
     assert used_fallback
+
+
+def test_extract_header_stamp_ns_valid_only() -> None:
+    msg = FakeMessage(header=FakeHeader(stamp=FakeStamp(sec=3, nanosec=7)))
+    assert extract_header_stamp_ns(msg) == 3_000_000_007
+
+
+def test_extract_header_stamp_ns_invalid_values_return_zero() -> None:
+    class BadStamp:
+        sec = "bad"
+        nanosec = 1
+
+    class BadHeader:
+        stamp = BadStamp()
+
+    class BadMsg:
+        header = BadHeader()
+
+    assert extract_header_stamp_ns(FakeMessage(header=FakeHeader(stamp=FakeStamp(sec=0, nanosec=0)))) == 0
+    assert extract_header_stamp_ns(BadMsg()) == 0

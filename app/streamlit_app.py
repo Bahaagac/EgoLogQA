@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -207,10 +208,20 @@ def _resolve_input_to_local_path(
     return path, 0.2
 
 
-def _render_metrics_table(title: str, metrics: dict[str, Any], keys: list[str]) -> None:
+def _render_metrics_table(
+    title: str,
+    metrics: dict[str, Any],
+    keys: list[str],
+    hide_none: bool = False,
+) -> None:
     rows = [{"metric": key, "value": metrics.get(key)} for key in keys]
+    if hide_none:
+        rows = [row for row in rows if row["value"] is not None]
     st.subheader(title)
-    st.dataframe(rows, use_container_width=True, hide_index=True)
+    if rows:
+        st.dataframe(rows, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No diagnostics available.")
 
 
 def _show_image_if_exists(path: Path, caption: str) -> None:
@@ -228,6 +239,10 @@ def _render_artifacts(metrics: dict[str, Any], output_dir: Path) -> None:
         "depth_debug_csv_path",
         "blur_fail_frames_dir",
         "blur_pass_frames_dir",
+        "blur_fail_frames_annotated_dir",
+        "blur_pass_frames_annotated_dir",
+        "evidence_manifest_path",
+        "benchmarks_path",
     ]
     rows = []
     for key in artifact_keys:
@@ -254,20 +269,81 @@ def _render_artifacts(metrics: dict[str, Any], output_dir: Path) -> None:
             st.subheader("Preview Frames")
             st.image([str(p) for p in preview_images[:8]], caption=[p.name for p in preview_images[:8]], width=220)
 
-    for dir_key, heading in [
-        ("blur_fail_frames_dir", "Blur Fail Evidence"),
-        ("blur_pass_frames_dir", "Blur Pass Evidence"),
-    ]:
-        rel = metrics.get(dir_key)
-        if not rel:
-            continue
-        folder = output_dir / str(rel)
-        if not folder.exists() or not folder.is_dir():
-            continue
-        images = sorted([p for p in folder.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"}])
-        if images:
-            st.subheader(heading)
-            st.image([str(p) for p in images[:8]], caption=[p.name for p in images[:8]], width=220)
+    evidence_views = [
+        (
+            "blur_fail_frames_annotated_dir",
+            "blur_fail_frames_dir",
+            "Blur Fail Evidence",
+        ),
+        (
+            "blur_pass_frames_annotated_dir",
+            "blur_pass_frames_dir",
+            "Blur Pass Evidence",
+        ),
+    ]
+    for annotated_key, raw_key, heading in evidence_views:
+        shown = False
+        ann_rel = metrics.get(annotated_key)
+        if ann_rel:
+            ann_folder = output_dir / str(ann_rel)
+            if ann_folder.exists() and ann_folder.is_dir():
+                ann_images = sorted(
+                    [p for p in ann_folder.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"}]
+                )
+                if ann_images:
+                    st.subheader(f"{heading} (Annotated)")
+                    st.image(
+                        [str(p) for p in ann_images[:8]],
+                        caption=[p.name for p in ann_images[:8]],
+                        width=220,
+                    )
+                    shown = True
+        raw_rel = metrics.get(raw_key)
+        if raw_rel:
+            raw_folder = output_dir / str(raw_rel)
+            if raw_folder.exists() and raw_folder.is_dir():
+                raw_images = sorted(
+                    [p for p in raw_folder.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"}]
+                )
+                if raw_images:
+                    title = f"{heading} (Raw)" if shown else heading
+                    st.subheader(title)
+                    st.image(
+                        [str(p) for p in raw_images[:8]],
+                        caption=[p.name for p in raw_images[:8]],
+                        width=220,
+                    )
+
+    if ADVANCED_MODE:
+        manifest_rel = metrics.get("evidence_manifest_path")
+        if manifest_rel:
+            manifest_path = output_dir / str(manifest_rel)
+            if manifest_path.exists() and manifest_path.is_file():
+                st.subheader("Evidence Manifest")
+                try:
+                    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    rows = []
+                    evidence_sets = payload.get("evidence_sets", {})
+                    for bucket in ("blur_fail", "blur_pass"):
+                        for item in evidence_sets.get(bucket, []):
+                            rows.append(
+                                {
+                                    "decision": item.get("decision"),
+                                    "rank": item.get("rank"),
+                                    "sample_i": item.get("sample_i"),
+                                    "timestamp_ms": item.get("timestamp_ms"),
+                                    "blur_value": item.get("blur_value"),
+                                    "blur_threshold": item.get("blur_threshold"),
+                                    "source_image_relpath": item.get("source_image_relpath"),
+                                    "annotated_image_relpath": item.get("annotated_image_relpath"),
+                                }
+                            )
+                    if rows:
+                        st.dataframe(rows, use_container_width=True, hide_index=True)
+                    else:
+                        st.caption("Manifest is present but contains no evidence entries.")
+                except Exception as exc:  # pragma: no cover - UI fallback
+                    st.warning(f"Could not parse evidence manifest: {exc}")
 
 
 def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
@@ -294,6 +370,25 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
             "vision_ok_ratio",
             "vision_coverage_seconds_est",
         ],
+    )
+
+    _render_metrics_table(
+        "Sync Diagnostics",
+        metrics,
+        [
+            "sync_signed_p50_ms",
+            "sync_signed_mean_ms",
+            "sync_signed_std_ms",
+            "sync_drift_ms_per_min",
+            "sync_jitter_p95_ms",
+            "rgb_timebase_diff_signed_p50_ms",
+            "rgb_timebase_diff_signed_mean_ms",
+            "rgb_timebase_diff_abs_p95_ms",
+            "rgb_timebase_diff_abs_max_ms",
+            "rgb_timebase_diff_sample_count",
+            "rgb_timebase_header_present_ratio",
+        ],
+        hide_none=True,
     )
 
     _render_metrics_table(

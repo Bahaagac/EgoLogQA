@@ -1,8 +1,13 @@
 from __future__ import annotations
 
-from typing import Optional
-
 import numpy as np
+
+
+def percentile_linear(values: np.ndarray, q: float) -> float:
+    try:
+        return float(np.percentile(values, q, method="linear"))
+    except TypeError:  # pragma: no cover - NumPy < 1.22 fallback
+        return float(np.percentile(values, q, interpolation="linear"))
 
 
 def compute_out_of_order_ratio(times_ms: list[float]) -> tuple[int, float]:
@@ -71,11 +76,54 @@ def compute_sync_metrics(
     rgb_arr = np.asarray(rgb_times_ms, dtype=np.float64)
     deltas = nearest_abs_delta(rgb_arr, depth_sorted)
     return {
-        "sync_p50_ms": float(np.percentile(deltas, 50)),
-        "sync_p95_ms": float(np.percentile(deltas, 95)),
+        "sync_p50_ms": percentile_linear(deltas, 50),
+        "sync_p95_ms": percentile_linear(deltas, 95),
         "sync_max_ms": float(np.max(deltas)),
         "sync_fail_ratio": float(np.mean(deltas > sync_fail_ms)),
     }
+
+
+def compute_sync_diagnostics(
+    rgb_times_ms: list[float],
+    depth_times_ms_for_index: list[float],
+) -> dict[str, float]:
+    if len(rgb_times_ms) == 0 or len(depth_times_ms_for_index) == 0:
+        return {}
+
+    depth_sorted = np.asarray(depth_times_ms_for_index, dtype=np.float64)
+    rgb_arr = np.asarray(rgb_times_ms, dtype=np.float64)
+    signed = nearest_signed_delta(rgb_arr, depth_sorted).astype(np.float64, copy=False)
+    n = int(signed.size)
+    if n == 0:
+        return {}
+
+    out: dict[str, float] = {
+        "sync_signed_p50_ms": percentile_linear(signed, 50),
+        "sync_signed_mean_ms": float(np.mean(signed, dtype=np.float64)),
+    }
+    if n >= 2:
+        out["sync_signed_std_ms"] = float(np.std(signed, ddof=0, dtype=np.float64))
+
+    if n < 3:
+        return out
+
+    x_min = (rgb_arr - float(rgb_arr[0])) / 60_000.0
+    x_mean = float(np.mean(x_min, dtype=np.float64))
+    y_mean = float(np.mean(signed, dtype=np.float64))
+    x_centered = x_min - x_mean
+    y_centered = signed - y_mean
+    var = float(np.mean(x_centered * x_centered, dtype=np.float64))
+    if var <= 0.0:
+        return out
+
+    cov = float(np.mean(x_centered * y_centered, dtype=np.float64))
+    slope = cov / var
+    t_med = percentile_linear(x_min, 50)
+    offset = percentile_linear(signed - slope * (x_min - t_med), 50)
+    residual = signed - (slope * (x_min - t_med) + offset)
+    out["sync_drift_ms_per_min"] = float(slope)
+    out["sync_jitter_p95_ms"] = percentile_linear(np.abs(residual), 95)
+    return out
 
 
 def nearest_abs_delta(query_times_ms: np.ndarray, sorted_ref_times_ms: np.ndarray) -> np.ndarray:
@@ -87,6 +135,13 @@ def nearest_abs_delta(query_times_ms: np.ndarray, sorted_ref_times_ms: np.ndarra
     right_delta = np.abs(sorted_ref_times_ms[right_idx] - query_times_ms)
     left_delta = np.abs(sorted_ref_times_ms[left_idx] - query_times_ms)
     return np.minimum(left_delta, right_delta)
+
+
+def nearest_signed_delta(query_times_ms: np.ndarray, sorted_ref_times_ms: np.ndarray) -> np.ndarray:
+    if len(sorted_ref_times_ms) == 0:
+        return np.array([], dtype=np.float64)
+    nearest_idx = nearest_indices(query_times_ms, sorted_ref_times_ms)
+    return (sorted_ref_times_ms[nearest_idx] - query_times_ms).astype(np.float64)
 
 
 def nearest_indices(query_times_ms: np.ndarray, sorted_ref_times_ms: np.ndarray) -> np.ndarray:

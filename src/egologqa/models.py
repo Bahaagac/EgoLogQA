@@ -104,6 +104,9 @@ class DebugConfig:
     export_evidence_on_warn: bool = True
     evidence_frames_k: int = 16
     export_preview_frames: bool = True
+    write_evidence_manifest: bool = False
+    write_annotated_evidence: bool = False
+    benchmarks_enabled: bool = False
 
 
 @dataclass

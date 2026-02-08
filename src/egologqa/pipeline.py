@@ -2,15 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Callable, Optional
 
 import numpy as np
 
 from egologqa.artifacts import (
     write_blur_debug_csv,
+    write_blur_annotated_evidence_frames,
     write_blur_evidence_frames,
+    write_benchmarks_json,
     write_depth_debug_csv,
     write_drop_timeline,
+    write_evidence_manifest_json,
     write_exposure_debug_csv,
     write_report_markdown,
     write_rgb_previews,
@@ -25,6 +29,7 @@ from egologqa.gate import evaluate_gate
 from egologqa.io.reader import MCapMessageSource, MessageSource
 from egologqa.metrics.pixel_metrics import compute_depth_pixel_metrics, compute_rgb_pixel_metrics
 from egologqa.metrics.time_metrics import (
+    compute_sync_diagnostics,
     compute_imu_coverage,
     compute_stream_gaps,
     compute_sync_metrics,
@@ -36,7 +41,7 @@ from egologqa.report import empty_report, git_commit_or_unknown, write_report_js
 from egologqa.sampling import sample_rgb_indices
 from egologqa.segments import extract_segments
 from egologqa.topic_select import select_topics
-from egologqa.time import extract_stamp_ns
+from egologqa.time import extract_header_stamp_ns, extract_stamp_ns
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -96,9 +101,26 @@ def analyze_file(
     report["config_used"] = config_to_dict(cfg)
     errors: list[dict[str, Any]] = []
     _append_legacy_exposure_keys_warning(cfg, errors)
+    bench_enabled = bool(cfg.debug.benchmarks_enabled)
+    phase_durations_s: dict[str, float] = {
+        "scan": 0.0,
+        "pass1": 0.0,
+        "pass2": 0.0,
+        "artifacts": 0.0,
+        "report_write": 0.0,
+    }
+    total_start = perf_counter()
+
+    def _timed_artifact_write(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        start = perf_counter()
+        out = fn(*args, **kwargs)
+        phase_durations_s["artifacts"] += perf_counter() - start
+        return out
+
     _emit(progress_cb, "scan", 0.05, "Scanning topics")
 
     try:
+        scan_start = perf_counter()
         source_obj: MessageSource = source if source is not None else MCapMessageSource(input_path)
         topic_stats = source_obj.scan_topics()
         selected = select_topics(cfg, topic_stats)
@@ -139,13 +161,26 @@ def analyze_file(
         bind(selected.imu_accel_topic, imu_acc_col)
         bind(selected.imu_gyro_topic, imu_gyro_col)
         selected_topics = set(stream_map.keys())
+        phase_durations_s["scan"] = perf_counter() - scan_start
+
+        rgb_total_messages_seen = 0
+        rgb_header_valid_count = 0
+        rgb_timebase_diffs_ms: list[float] = []
 
         # Pass 1: timestamps only.
+        pass1_start = perf_counter()
         _emit(progress_cb, "pass1", 0.12, "Pass 1: collecting timestamps")
         for rec in source_obj.iter_messages(topics=selected_topics):
             collectors = stream_map.get(rec.topic, [])
             if not collectors:
                 continue
+            if rec.topic == selected.rgb_topic:
+                rgb_total_messages_seen += 1
+                header_ns = extract_header_stamp_ns(rec.msg)
+                if header_ns > 0:
+                    rgb_header_valid_count += 1
+                    if rec.log_time_ns > 0:
+                        rgb_timebase_diffs_ms.append((header_ns - rec.log_time_ns) / 1_000_000.0)
             t_ns, _, _ = extract_stamp_ns(rec.msg, rec.log_time_ns)
             for col in collectors:
                 col.add_timestamp(t_ns)
@@ -239,6 +274,26 @@ def analyze_file(
             sync_fail_ms=cfg.thresholds.sync_fail_ms,
         )
         report["metrics"].update(sync_metrics)
+        sync_diag_metrics = compute_sync_diagnostics(
+            rgb_times_ms=sync_rgb_times,
+            depth_times_ms_for_index=sync_depth_times,
+        )
+        if sync_diag_metrics:
+            report["metrics"].update(sync_diag_metrics)
+
+        if rgb_timebase_diffs_ms:
+            diffs_arr = np.asarray(rgb_timebase_diffs_ms, dtype=np.float64)
+            abs_arr = np.abs(diffs_arr)
+            report["metrics"]["rgb_timebase_diff_signed_p50_ms"] = _percentile50(diffs_arr)
+            report["metrics"]["rgb_timebase_diff_signed_mean_ms"] = float(np.mean(diffs_arr))
+            report["metrics"]["rgb_timebase_diff_abs_p95_ms"] = _percentile95(abs_arr)
+            report["metrics"]["rgb_timebase_diff_abs_max_ms"] = float(np.max(abs_arr))
+            report["metrics"]["rgb_timebase_diff_sample_count"] = int(diffs_arr.size)
+            report["metrics"]["rgb_timebase_header_present_ratio"] = (
+                float(rgb_header_valid_count / rgb_total_messages_seen)
+                if rgb_total_messages_seen > 0
+                else None
+            )
 
         imu_acc_cov = None
         imu_gyro_cov = None
@@ -298,6 +353,8 @@ def analyze_file(
                 depth_index_by_sample_pos[pos] = depth_idx
 
         # Pass 2: pixel metrics on sampled frames.
+        phase_durations_s["pass1"] = perf_counter() - pass1_start
+        pass2_start = perf_counter()
         _emit(progress_cb, "pass2", 0.55, "Pass 2: decoding sampled frames")
         rgb_frames_by_pos: dict[int, Any] = {}
         depth_frames_by_pos: dict[int, Any] = {}
@@ -459,7 +516,9 @@ def analyze_file(
 
         if cfg.debug.export_exposure_csv and rgb_decode_supported:
             if exposure_rows:
-                exposure_csv_path = write_exposure_debug_csv(exposure_rows, output_dir)
+                exposure_csv_path = _timed_artifact_write(
+                    write_exposure_debug_csv, exposure_rows, output_dir
+                )
                 report["metrics"]["exposure_debug_csv_path"] = _relative_path(
                     exposure_csv_path, output_dir
                 )
@@ -540,9 +599,9 @@ def analyze_file(
             depth_rows.append(depth_row)
 
         if cfg.debug.export_blur_csv:
-            blur_csv_path = write_blur_debug_csv(blur_rows, output_dir)
+            blur_csv_path = _timed_artifact_write(write_blur_debug_csv, blur_rows, output_dir)
             report["metrics"]["blur_debug_csv_path"] = _relative_path(blur_csv_path, output_dir)
-            depth_csv_path = write_depth_debug_csv(depth_rows, output_dir)
+            depth_csv_path = _timed_artifact_write(write_depth_debug_csv, depth_rows, output_dir)
             report["metrics"]["depth_debug_csv_path"] = _relative_path(depth_csv_path, output_dir)
 
         blur_warn_trigger = (
@@ -552,9 +611,14 @@ def analyze_file(
         should_export_evidence = cfg.debug.export_evidence_frames or (
             cfg.debug.export_evidence_on_warn and blur_warn_trigger
         )
-        if should_export_evidence:
-            blur_fail_evidence_rows: list[dict[str, Any]] = []
-            blur_pass_evidence_rows: list[dict[str, Any]] = []
+        evidence_requested = (
+            should_export_evidence
+            or cfg.debug.write_annotated_evidence
+            or cfg.debug.write_evidence_manifest
+        )
+        blur_fail_evidence_rows: list[dict[str, Any]] = []
+        blur_pass_evidence_rows: list[dict[str, Any]] = []
+        if evidence_requested:
             for row in blur_rows:
                 if int(row.get("decode_ok", 0)) != 1:
                     continue
@@ -574,14 +638,59 @@ def analyze_file(
                     blur_fail_evidence_rows.append(evidence_row)
                 else:
                     blur_pass_evidence_rows.append(evidence_row)
-            fail_dir, pass_dir = write_blur_evidence_frames(
+
+        cv2_available = _cv2_available()
+        fail_dir = None
+        pass_dir = None
+        if evidence_requested and cv2_available:
+            fail_dir, pass_dir = _timed_artifact_write(
+                write_blur_evidence_frames,
                 blur_fail_evidence_rows,
                 blur_pass_evidence_rows,
                 output_dir,
                 cfg.debug.evidence_frames_k,
             )
+        if evidence_requested:
             report["metrics"]["blur_fail_frames_dir"] = _relative_path(fail_dir, output_dir)
             report["metrics"]["blur_pass_frames_dir"] = _relative_path(pass_dir, output_dir)
+
+        annotated_fail_dir = None
+        annotated_pass_dir = None
+        if cfg.debug.write_annotated_evidence and cv2_available:
+            annotated_fail_dir, annotated_pass_dir = _timed_artifact_write(
+                write_blur_annotated_evidence_frames,
+                blur_fail_evidence_rows,
+                blur_pass_evidence_rows,
+                output_dir,
+                cfg.debug.evidence_frames_k,
+                blur_threshold if blur_threshold is not None else None,
+            )
+            if annotated_fail_dir:
+                report["metrics"]["blur_fail_frames_annotated_dir"] = _relative_path(
+                    annotated_fail_dir, output_dir
+                )
+            if annotated_pass_dir:
+                report["metrics"]["blur_pass_frames_annotated_dir"] = _relative_path(
+                    annotated_pass_dir, output_dir
+                )
+
+        if cfg.debug.write_evidence_manifest:
+            manifest_path = _timed_artifact_write(
+                write_evidence_manifest_json,
+                output_dir,
+                blur_fail_evidence_rows,
+                blur_pass_evidence_rows,
+                cfg.debug.evidence_frames_k,
+                blur_threshold if blur_threshold is not None else None,
+                cfg.sampling.rgb_stride,
+                cfg.sampling.max_rgb_frames,
+                cv2_available,
+                bool(annotated_fail_dir or annotated_pass_dir),
+            )
+            if manifest_path:
+                report["metrics"]["evidence_manifest_path"] = _relative_path(
+                    manifest_path, output_dir
+                )
 
         sampled_imu_acc_cov = (
             [imu_acc_cov[idx] for idx in sampled_rgb_indices] if imu_acc_cov is not None else None
@@ -683,12 +792,16 @@ def analyze_file(
             errors=errors,
         )
         report["gate"] = gate
+        pass2_total = perf_counter() - pass2_start
+        phase_durations_s["pass2"] = max(0.0, pass2_total - phase_durations_s["artifacts"])
 
         preview_paths: list[str] = []
         if cfg.debug.export_preview_frames:
-            preview_paths = write_rgb_previews(rgb_frames_by_pos, output_dir)
-        plot_path = write_sync_histogram(sampled_sync_deltas, output_dir)
-        drop_timeline_path = write_drop_timeline(rgb_col.times_ms, rgb_gap["gap_intervals_ms"], output_dir)
+            preview_paths = _timed_artifact_write(write_rgb_previews, rgb_frames_by_pos, output_dir)
+        plot_path = _timed_artifact_write(write_sync_histogram, sampled_sync_deltas, output_dir)
+        drop_timeline_path = _timed_artifact_write(
+            write_drop_timeline, rgb_col.times_ms, rgb_gap["gap_intervals_ms"], output_dir
+        )
         if preview_paths:
             report["metrics"]["preview_count"] = len(preview_paths)
         if plot_path:
@@ -712,11 +825,48 @@ def analyze_file(
         report["gate"]["warn_reasons"] = []
         _emit(progress_cb, "error", 1.0, "Analysis failed", {"error": str(exc)})
 
+    if bench_enabled:
+        report["metrics"]["benchmarks_path"] = "debug/benchmarks.json"
+
+    report_write_start = perf_counter()
     try:
         write_report_markdown(report, output_dir)
     except Exception:
         pass
     report_path = write_report_json(report, output_dir)
+    phase_durations_s["report_write"] = perf_counter() - report_write_start
+
+    if bench_enabled:
+        total_s = perf_counter() - total_start
+        benchmarks = {
+            "schema_version": 1,
+            "phase_durations_s": phase_durations_s,
+            "total_s": total_s,
+            "counts": {
+                "frames_analyzed": report.get("sampling", {}).get("frames_analyzed", 0),
+                "sync_sample_count": report.get("metrics", {}).get("sync_sample_count", 0),
+                "rgb_decode_attempt_count": report.get("metrics", {}).get(
+                    "rgb_decode_attempt_count", 0
+                ),
+                "rgb_decode_success_count": report.get("metrics", {}).get(
+                    "rgb_decode_success_count", 0
+                ),
+                "depth_decode_attempt_count": report.get("metrics", {}).get(
+                    "depth_decode_attempt_count", 0
+                ),
+                "depth_decode_success_count": report.get("metrics", {}).get(
+                    "depth_decode_success_count", 0
+                ),
+            },
+        }
+        try:
+            bench_path = _timed_artifact_write(write_benchmarks_json, benchmarks, output_dir)
+            if not bench_path:
+                report["metrics"].pop("benchmarks_path", None)
+        except Exception:
+            report["metrics"].pop("benchmarks_path", None)
+        report_path = write_report_json(report, output_dir)
+
     return AnalysisResult(
         report=report,
         gate=report["gate"]["gate"],
@@ -758,6 +908,29 @@ def _relative_path(path: str | None, output_dir: str | Path) -> str | None:
         return rel.as_posix()
     except Exception:
         return str(path).replace("\\", "/")
+
+
+def _cv2_available() -> bool:
+    try:
+        import cv2  # noqa: F401
+
+        return True
+    except Exception:
+        return False
+
+
+def _percentile50(values: np.ndarray) -> float:
+    try:
+        return float(np.percentile(values, 50, method="linear"))
+    except TypeError:  # pragma: no cover - NumPy < 1.22 fallback
+        return float(np.percentile(values, 50, interpolation="linear"))
+
+
+def _percentile95(values: np.ndarray) -> float:
+    try:
+        return float(np.percentile(values, 95, method="linear"))
+    except TypeError:  # pragma: no cover - NumPy < 1.22 fallback
+        return float(np.percentile(values, 95, interpolation="linear"))
 
 
 def _append_legacy_exposure_keys_warning(
