@@ -140,14 +140,14 @@ The default UI is kiosk-style with two tabs:
   - `.mcap` dropdown (with file-size labels)
   - tab-specific Analyze button
 - `Local disk` tab:
-  - folder selector (`~/Downloads`, `~/Desktop`, `~/.cache/egologqa`, `Last used`, or `Other...`)
-  - `.mcap` dropdown (with file-size labels)
+  - browser upload (`st.file_uploader`) for one `.mcap` file
+  - uploaded filename + size preview
   - tab-specific Analyze button
 - Progress + full same-page results after each run
 
 No dataset/revision/prefix/token/cache controls are shown by default.
-Both source dropdowns use placeholder-first behavior (`Select an MCAP file`) and `Analyze` is disabled until you explicitly pick a file.
-Local disk mode analyzes the selected file in place (no browser upload and no local-file copy into run output).
+`Analyze` is disabled until a valid source is selected (HF dropdown choice or Local upload).
+Local disk mode stages the uploaded file under the run directory before analysis.
 
 Defaults:
 
@@ -164,7 +164,6 @@ Env overrides:
 - `EGOLOGQA_HF_PREFIX`
 - `EGOLOGQA_HF_CACHE_DIR`
 - `EGOLOGQA_RUNS_DIR`
-- `EGOLOGQA_LOCAL_MAX_FILES` (default `500`)
 - `HF_TOKEN` (optional, not shown in UI)
 
 Developer-only advanced panel:
@@ -183,5 +182,11 @@ Deterministic validation tooling lives under `validation/`:
 Streamlit log noise suppression:
 
 - `.streamlit/config.toml` sets logger level to `error`
+- `.streamlit/config.toml` sets `server.maxUploadSize = 500` (MB)
 - `.streamlit/secrets.toml` is intentionally present (empty)
 - Fallback launch flag if needed: `--logger.level=error`
+
+Deployment note:
+
+- Streamlit Community Cloud is the supported free hosting target for this app.
+- Vercel is not a target host for this Streamlit runtime.
