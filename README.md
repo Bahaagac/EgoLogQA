@@ -203,7 +203,7 @@ Streamlit log noise suppression:
 
 - `.streamlit/config.toml` sets logger level to `error`
 - `.streamlit/config.toml` sets `server.maxUploadSize = 500` (MB)
-- `.streamlit/secrets.toml` is intentionally present (empty)
+- `.streamlit/secrets.toml` must stay local/untracked; configure production secrets in Streamlit Community Cloud -> App Settings -> Secrets
 - Fallback launch flag if needed: `--logger.level=error`
 
 Deployment note:

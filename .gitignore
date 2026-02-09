@@ -13,3 +13,5 @@ validation/runs/
 validation/results/
 validation/labels.csv
 docs/EGOLOGQA_MASTER_DOCUMENTATION.md
+
+.streamlit/secrets.toml
