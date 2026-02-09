@@ -24,8 +24,8 @@ from egologqa.kiosk_helpers import (
     write_latest_run_pointer,
 )
 
+from egologqa.ai_summary import deterministic_action_line, generate_summary_for_ui
 from egologqa.pipeline import analyze_file
-from egologqa.ui_text import recommended_action_copy
 
 
 HF_REPO_ID = os.getenv("EGOLOGQA_HF_REPO_ID", "MicroAGI-Labs/MicroAGI00")
@@ -35,6 +35,8 @@ HF_CACHE_DIR = Path(os.getenv("EGOLOGQA_HF_CACHE_DIR", "~/.cache/EgoLogQA/hf_mca
 RUNS_BASE_DIR = resolve_runs_base_dir(os.getenv("EGOLOGQA_RUNS_DIR"))
 CONFIG_PATH = "configs/microagi00_ros2.yaml"
 ADVANCED_MODE = os.getenv("EGOLOGQA_UI_ADVANCED", "0") == "1"
+AI_SUMMARY_ENABLED = os.getenv("EGOLOGQA_AI_SUMMARY_ENABLED", "1") == "1"
+AI_SUMMARY_MODEL = os.getenv("EGOLOGQA_GEMINI_MODEL", "gemini-2.5-flash")
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -606,7 +608,7 @@ _AF_KEYS = list(_AF.keys())
 # ───────────────────────────────────────────────────────────────────────────
 # Full results rendering  (restructured layout, same data)
 # ───────────────────────────────────────────────────────────────────────────
-def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
+def _render_full_results(report: dict[str, Any], output_dir: Path, ai_summary: dict[str, Any] | None = None) -> None:
     st.markdown("---")
     metrics = report.get("metrics", {})
     streams = report.get("streams", {})
@@ -630,16 +632,30 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
         unsafe_allow_html=True,
     )
 
-    action_token = str(gate.get("recommended_action") or "UNKNOWN")
-    action_copy = recommended_action_copy(
-        action_token=action_token, gate=str(gate_name),
-        fail_reasons=fail_reasons, warn_reasons=warn_reasons,
-    )
+    action_token = str(gate.get("recommended_action") or "")
+    summary_payload = ai_summary if isinstance(ai_summary, dict) else {}
+    summary_line = str(summary_payload.get("summary_line") or "").strip()
+    if not summary_line:
+        summary_line = "Quality summary unavailable. Showing deterministic action guidance."
+
+    action_line = str(summary_payload.get("action_line") or deterministic_action_line(action_token)).strip()
+    source_label = "Gemini" if summary_payload.get("source") == "gemini" else "Deterministic fallback"
+    summary_error_code = str(summary_payload.get("error_code") or "").strip()
+    debug_label_html = ""
+    if ADVANCED_MODE and source_label == "Deterministic fallback" and summary_error_code:
+        debug_label_html = (
+            f'<div style="margin-top:0.15rem;font-size:0.72rem;color:#7a8194;">'
+            f'Debug: {html.escape(summary_error_code)}</div>'
+        )
+
     st.markdown(
         '<div class="act-card">'
-        f'<div class="act-txt"><strong>What to do:</strong> {html.escape(action_copy["what_to_do"])}</div>'
-        f'<div style="margin-top:0.25rem;font-size:0.82rem;color:#7a8194;">'
-        f'<strong>Why:</strong> {html.escape(action_copy["why"])}</div>'
+        '<div class="act-lbl">Quick Summary</div>'
+        f'<div class="act-txt">{html.escape(summary_line)}</div>'
+        f'<div style="margin-top:0.25rem;font-size:0.85rem;color:#1a1a2e;">'
+        f'<strong>{html.escape(action_line)}</strong></div>'
+        f'<div style="margin-top:0.2rem;font-size:0.76rem;color:#7a8194;">{html.escape(source_label)}</div>'
+        f'{debug_label_html}'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -1070,6 +1086,8 @@ st.session_state.setdefault("mcap_list_loaded", False)
 st.session_state.setdefault("selected_hf_file", None)
 st.session_state.setdefault("latest_report", None)
 st.session_state.setdefault("latest_output_dir", None)
+st.session_state.setdefault("latest_ai_summary", None)
+st.session_state.setdefault("latest_ai_summary_run_dir", None)
 
 # ───────────────────────────────────────────────────────────────────────────
 # Progress & status widgets
@@ -1162,11 +1180,23 @@ def _run_analysis(
             config=cfg,
             progress_cb=_on_progress_scaled(analysis_start, 1.0),
         )
+        ai_summary = generate_summary_for_ui(
+            report=result.report,
+            output_dir=output_dir,
+            secrets=st.secrets,
+            enabled=AI_SUMMARY_ENABLED,
+            model=AI_SUMMARY_MODEL,
+        )
 
+        run_dir = str(output_dir.resolve())
         st.session_state["latest_report"] = result.report
-        st.session_state["latest_output_dir"] = str(output_dir.resolve())
+        st.session_state["latest_output_dir"] = run_dir
+        st.session_state["latest_ai_summary"] = ai_summary
+        st.session_state["latest_ai_summary_run_dir"] = run_dir
         _finish_status_ok("Done")
     except Exception as exc:
+        st.session_state["latest_ai_summary"] = None
+        st.session_state["latest_ai_summary_run_dir"] = None
         _error_box(exc, "Analysis failed.")
         _finish_status_fail("Failed")
 
@@ -1273,5 +1303,12 @@ with local_tab:
 # ───────────────────────────────────────────────────────────────────────────
 latest_report = st.session_state.get("latest_report")
 latest_output_dir = st.session_state.get("latest_output_dir")
+latest_ai_summary = st.session_state.get("latest_ai_summary")
+latest_ai_summary_run_dir = st.session_state.get("latest_ai_summary_run_dir")
+
+summary_for_run: dict[str, Any] | None = None
+if latest_output_dir and latest_ai_summary_run_dir == str(latest_output_dir):
+    summary_for_run = latest_ai_summary if isinstance(latest_ai_summary, dict) else None
+
 if latest_report and latest_output_dir:
-    _render_full_results(latest_report, Path(str(latest_output_dir)))
+    _render_full_results(latest_report, Path(str(latest_output_dir)), ai_summary=summary_for_run)

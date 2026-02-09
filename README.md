@@ -164,12 +164,28 @@ Env overrides:
 - `EGOLOGQA_HF_PREFIX`
 - `EGOLOGQA_HF_CACHE_DIR`
 - `EGOLOGQA_RUNS_DIR`
+- `EGOLOGQA_AI_SUMMARY_ENABLED` (`1` by default, set `0` to disable AI summary)
+- `EGOLOGQA_GEMINI_MODEL` (default `gemini-2.5-flash`)
 - `HF_TOKEN` (optional, not shown in UI)
+- `GOOGLE_API_KEY` or `GEMINI_API_KEY` (optional, for Gemini summary)
 
 Developer-only advanced panel:
 
 - Set `EGOLOGQA_UI_ADVANCED=1`
 - Enables manual Hugging Face list refresh and error details
+
+### AI Summary (Gemini)
+
+The main results page includes an automatic two-line quick summary per completed run:
+
+- Line 1: one short AI-generated finding sentence
+- Line 2: deterministic action line from the gate action token
+
+Behavior:
+
+- The feature is UI-only and does not modify `report.json`.
+- If API key, SDK, network, or model response fails, the app falls back to deterministic summary text.
+- API key precedence is: `GOOGLE_API_KEY`, `GEMINI_API_KEY`, then `st.secrets`.
 
 ## Validation Pack
 
