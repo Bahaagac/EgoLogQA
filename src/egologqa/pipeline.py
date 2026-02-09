@@ -393,6 +393,10 @@ def analyze_file(
         rgb_decode_error_by_pos: dict[int, str] = {}
         depth_decode_error_by_pos: dict[int, str] = {}
         depth_non_uint16_positions: list[int] = []
+        cv2_probe_available, cv2_import_error = _cv2_probe()
+        report["metrics"]["cv2_available"] = cv2_probe_available
+        if cv2_import_error is not None:
+            report["metrics"]["cv2_import_error"] = cv2_import_error
         rgb_targets = set(sampled_rgb_indices)
         sample_pos_by_rgb_idx: dict[int, list[int]] = {}
         for pos, idx in enumerate(sampled_rgb_indices):
@@ -497,7 +501,12 @@ def analyze_file(
                     "WARN",
                     code,
                     "RGB pixel decode unavailable for sampled frames.",
-                    {"error_counts": rgb_decode_errors},
+                    {
+                        "error_counts": rgb_decode_errors,
+                        "cv2_available": cv2_probe_available,
+                        "cv2_import_error": cv2_import_error,
+                        "rgb_decode_attempt_count": rgb_decode_attempt_count,
+                    },
                 )
             )
         if not depth_decode_supported and depth_col.times_ns:
@@ -507,7 +516,12 @@ def analyze_file(
                     "WARN",
                     code,
                     "Depth pixel decode unavailable for sampled frames.",
-                    {"error_counts": depth_decode_errors},
+                    {
+                        "error_counts": depth_decode_errors,
+                        "cv2_available": cv2_probe_available,
+                        "cv2_import_error": cv2_import_error,
+                        "depth_decode_attempt_count": depth_decode_attempt_count,
+                    },
                 )
             )
         if depth_non_uint16_positions:
@@ -540,6 +554,8 @@ def analyze_file(
                     {
                         "rgb_decode_attempt_count": rgb_decode_attempt_count,
                         "rgb_decode_success_count": rgb_decode_success_count,
+                        "cv2_available": cv2_probe_available,
+                        "cv2_import_error": cv2_import_error,
                     },
                 )
             )
@@ -1070,13 +1086,18 @@ def _relative_path(path: str | None, output_dir: str | Path) -> str | None:
         return str(path).replace("\\", "/")
 
 
-def _cv2_available() -> bool:
+def _cv2_probe() -> tuple[bool, str | None]:
     try:
         import cv2  # noqa: F401
 
-        return True
-    except Exception:
-        return False
+        return True, None
+    except Exception as exc:
+        return False, f"{exc.__class__.__name__}: {exc}"
+
+
+def _cv2_available() -> bool:
+    available, _ = _cv2_probe()
+    return available
 
 
 def _percentile50(values: np.ndarray) -> float:

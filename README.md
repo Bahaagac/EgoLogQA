@@ -190,3 +190,11 @@ Deployment note:
 
 - Streamlit Community Cloud is the supported free hosting target for this app.
 - Vercel is not a target host for this Streamlit runtime.
+
+### Troubleshooting: Deployed app shows no images
+
+When the hosted UI renders no previews/evidence images, verify decode health first:
+
+- Check `metrics.rgb_decode_success_count` in `report.json` (must be greater than `0` for image artifacts).
+- Check `errors[]` contexts for decode warnings (`RGB_DECODE_FAIL`, `DEPTH_PNG_IMDECODE_FAIL`, `BLUR_UNAVAILABLE_NO_DECODE`) and inspect `cv2_available` / `cv2_import_error`.
+- Use Python `3.11` on Streamlit Community Cloud and redeploy after the `opencv-python-headless` dependency switch.

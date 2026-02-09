@@ -228,6 +228,18 @@ def _error_box(exc: Exception, default_msg: str) -> None:
             st.code(f"{exc.__class__.__name__}: {exc}")
 
 
+def _first_decode_error_context(errors: list[Any], codes: set[str]) -> dict[str, Any] | None:
+    for item in errors:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("code") or "") not in codes:
+            continue
+        context = item.get("context")
+        if isinstance(context, dict):
+            return context
+    return None
+
+
 def _phase_label(phase: str) -> str:
     mapping = {"scan": "scan", "pass1": "pass1", "pass2": "pass2", "done": "finalize", "error": "error"}
     return mapping.get(phase, phase)
@@ -816,6 +828,31 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
             _sec_label(caption)
             _help(ht)
             _show_image_if_exists(output_dir / str(rel), caption)
+
+    rgb_decode_success_count = int(metrics.get("rgb_decode_success_count") or 0)
+    if rgb_decode_success_count == 0:
+        st.warning("No preview/evidence images were generated because RGB decoding failed.")
+        decode_context = _first_decode_error_context(
+            errors, {"RGB_DECODE_FAIL", "BLUR_UNAVAILABLE_NO_DECODE"}
+        )
+        details: list[str] = []
+        cv2_import_error = None
+        if decode_context is not None:
+            cv2_import_error = decode_context.get("cv2_import_error")
+            cv2_available = decode_context.get("cv2_available")
+            if isinstance(cv2_available, bool):
+                details.append(f"cv2_available={cv2_available}")
+            attempts = decode_context.get("rgb_decode_attempt_count")
+            if attempts is not None:
+                details.append(f"rgb_decode_attempt_count={attempts}")
+        if not isinstance(cv2_import_error, str) or not cv2_import_error.strip():
+            metric_hint = metrics.get("cv2_import_error")
+            if isinstance(metric_hint, str) and metric_hint.strip():
+                cv2_import_error = metric_hint
+        if isinstance(cv2_import_error, str) and cv2_import_error.strip():
+            details.insert(0, f"cv2_import_error={cv2_import_error}")
+        if details:
+            st.caption("Decode diagnostics: " + " | ".join(details[:3]))
 
     # Preview frames
     preview_images: list[Path] = []
