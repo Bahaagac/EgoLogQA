@@ -46,6 +46,12 @@ class ThresholdsConfig:
     imu_gap_factor: float = 5.0
     sync_warn_ms: float = 16.0
     sync_fail_ms: float = 33.0
+    sync_min_samples: int = 30
+    sync_jitter_warn_ms: float = 5.0
+    sync_drift_warn_ms_per_min: float = 10.0
+    sync_stable_std_max_ms: float = 2.0
+    sync_stable_jitter_p95_max_ms: float = 2.0
+    sync_stable_drift_abs_max_ms_per_min: float = 5.0
     imu_window_ms: float = 20.0
     blur_threshold_min: float = 80.0
     blur_roi_margin_ratio: float = 0.05
@@ -59,6 +65,9 @@ class ThresholdsConfig:
     blur_fail_warn_ratio: float = 0.20
     exposure_bad_warn_ratio: float = 0.20
     depth_invalid_mean_warn: float = 0.35
+    depth_fail_ratio_fail: float = 0.50
+    depth_invalid_mean_fail: float = 0.60
+    pass_exposure_evidence_k: int = 2
     # Legacy exposure keys retained for backward compatibility.
     # contrast_min/low_clip_threshold/high_clip_threshold are not used by the v1.3
     # exposure classifier (which uses *_warn and dynamic-range based logic).

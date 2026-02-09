@@ -133,8 +133,15 @@ def _render_gate_summary(report: dict[str, Any]) -> None:
     else:
         st.error(f"Gate: {gate_name}")
     st.write(f"Recommended action: `{gate.get('recommended_action')}`")
-    st.write(f"Warn reasons: `{gate.get('warn_reasons', [])}`")
-    st.write(f"Fail reasons: `{gate.get('fail_reasons', [])}`")
+    if gate_name == "PASS":
+        return
+
+    fail_reasons = gate.get("fail_reasons", [])
+    warn_reasons = gate.get("warn_reasons", [])
+    if gate_name == "FAIL" and fail_reasons:
+        _render_reason_table("Fail Reasons", "FAIL", fail_reasons, report)
+    if gate_name in {"WARN", "FAIL"} and warn_reasons:
+        _render_reason_table("Warn Reasons", "WARN", warn_reasons, report)
 
 
 def _on_progress_scaled(start: float, end: float):
@@ -212,12 +219,13 @@ def _render_metrics_table(
     title: str,
     metrics: dict[str, Any],
     keys: list[str],
+    explanation: str,
     hide_none: bool = False,
 ) -> None:
     rows = [{"metric": key, "value": metrics.get(key)} for key in keys]
     if hide_none:
         rows = [row for row in rows if row["value"] is not None]
-    st.subheader(title)
+    _render_header(title, explanation, level=3)
     if rows:
         st.dataframe(rows, use_container_width=True, hide_index=True)
     else:
@@ -229,18 +237,202 @@ def _show_image_if_exists(path: Path, caption: str) -> None:
         st.image(str(path), caption=caption, use_container_width=True)
 
 
+def _render_header(
+    title: str,
+    explanation: str,
+    level: int = 2,
+) -> None:
+    if level == 2:
+        st.header(title, anchor=False)
+    else:
+        st.subheader(title, anchor=False)
+    st.caption(f"ℹ {explanation}")
+
+
+def _load_segments_from_metric(metrics: dict[str, Any], output_dir: Path, key: str) -> list[dict[str, Any]]:
+    rel = metrics.get(key)
+    if not rel:
+        return []
+    path = output_dir / str(rel)
+    if not path.exists() or not path.is_file():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    return []
+
+
+def _show_image_set(paths: list[Path], max_images: int | None = 12) -> None:
+    images = sorted(paths, key=lambda p: p.name.lower())
+    if max_images is not None:
+        images = images[:max_images]
+    if not images:
+        return
+    st.image([str(p) for p in images], caption=[p.name for p in images], width=220)
+    st.caption("Filenames: " + ", ".join(p.name for p in images))
+
+
+def _normalize_segment_rows(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        rows.append(
+            {
+                "start_ns": seg.get("start_ns"),
+                "end_ns": seg.get("end_ns"),
+                "duration_s": seg.get("duration_s"),
+            }
+        )
+    return rows
+
+
+REASON_DESCRIPTIONS: dict[str, str] = {
+    "FAIL_ANALYSIS_ERROR": "The analysis process failed internally and the result is not reliable.",
+    "FAIL_NO_RGB_STREAM": "RGB timestamps are missing, so the run cannot be evaluated correctly.",
+    "FAIL_SYNC_P95_GT_FAIL": "RGB and depth timing mismatch is too large for safe use.",
+    "FAIL_DROP_RATIO_GT_FAIL": "Too many timing gaps were detected in the RGB stream.",
+    "FAIL_DEPTH_FAIL_RATIO_GT_FAIL": "Too many sampled depth frames failed quality checks.",
+    "FAIL_DEPTH_INVALID_MEAN_GT_FAIL": "Average invalid depth-pixel ratio is too high.",
+    "FAIL_NO_CLEAN_SEGMENTS_LONG_ENOUGH": "No clean segment is long enough for reliable use.",
+    "WARN_DEPTH_TIMESTAMP_MISSING": "Depth timestamps are missing for part of this run.",
+    "WARN_DEPTH_PIXEL_DECODE_UNSUPPORTED": "Depth pixel format could not be decoded for this run.",
+    "WARN_RGB_PIXEL_DECODE_UNSUPPORTED": "RGB pixel format could not be decoded for this run.",
+    "WARN_SYNC_P95_GT_WARN": "Timing mismatch is above warning level.",
+    "WARN_SYNC_JITTER_P95_GT_WARN": "Timing jitter is above warning level.",
+    "WARN_SYNC_DRIFT_ABS_GT_WARN": "Timing drift is above warning level.",
+    "WARN_DROP_RATIO_GT_WARN": "Frame timing gaps are higher than expected.",
+    "WARN_IMU_MISSING_RATIO_GT_WARN": "IMU coverage is lower than expected.",
+    "WARN_BLUR_FAIL_RATIO_GT_WARN": "Many sampled frames are blur-fail.",
+    "WARN_EXPOSURE_BAD_RATIO_GT_WARN": "Many sampled frames are exposure-fail.",
+    "WARN_DEPTH_INVALID_MEAN_GT_WARN": "Average invalid depth-pixel ratio is above warning level.",
+}
+
+
+def _format_reason_context(code: str, report: dict[str, Any]) -> str:
+    metrics = report.get("metrics", {})
+    streams = report.get("streams", {})
+    thresholds = report.get("config_used", {}).get("thresholds", {})
+    errors = report.get("errors", [])
+
+    if code == "FAIL_ANALYSIS_ERROR":
+        for err in errors:
+            if err.get("severity") == "ERROR":
+                return f"Observed error code: {err.get('code', 'unknown')}"
+        return "Observed an internal analysis error."
+    if code == "FAIL_NO_RGB_STREAM":
+        return f"rgb_timestamps_present={streams.get('rgb_timestamps_present')}"
+    if code in {"FAIL_SYNC_P95_GT_FAIL", "WARN_SYNC_P95_GT_WARN"}:
+        return (
+            f"sync_p95_ms={metrics.get('sync_p95_ms')} "
+            f"(warn={thresholds.get('sync_warn_ms')}, fail={thresholds.get('sync_fail_ms')})"
+        )
+    if code == "WARN_SYNC_JITTER_P95_GT_WARN":
+        return (
+            f"sync_jitter_p95_ms={metrics.get('sync_jitter_p95_ms')} "
+            f"(warn={thresholds.get('sync_jitter_warn_ms')})"
+        )
+    if code == "WARN_SYNC_DRIFT_ABS_GT_WARN":
+        return (
+            f"sync_drift_ms_per_min={metrics.get('sync_drift_ms_per_min')} "
+            f"(abs warn={thresholds.get('sync_drift_warn_ms_per_min')})"
+        )
+    if code == "FAIL_DROP_RATIO_GT_FAIL":
+        return f"drop_ratio={metrics.get('drop_ratio')} (fail={thresholds.get('drop_fail_ratio')})"
+    if code == "WARN_DROP_RATIO_GT_WARN":
+        return f"drop_ratio={metrics.get('drop_ratio')} (warn={thresholds.get('drop_warn_ratio')})"
+    if code == "WARN_IMU_MISSING_RATIO_GT_WARN":
+        return (
+            "imu_combined_missing_ratio="
+            f"{metrics.get('imu_combined_missing_ratio')} "
+            f"(warn={thresholds.get('imu_missing_warn_ratio')})"
+        )
+    if code == "WARN_BLUR_FAIL_RATIO_GT_WARN":
+        return (
+            f"blur_fail_ratio={metrics.get('blur_fail_ratio')} "
+            f"(warn={thresholds.get('blur_fail_warn_ratio')})"
+        )
+    if code == "WARN_EXPOSURE_BAD_RATIO_GT_WARN":
+        return (
+            f"exposure_bad_ratio={metrics.get('exposure_bad_ratio')} "
+            f"(warn={thresholds.get('exposure_bad_warn_ratio')})"
+        )
+    if code == "FAIL_DEPTH_FAIL_RATIO_GT_FAIL":
+        return (
+            f"depth_fail_ratio={metrics.get('depth_fail_ratio')} "
+            f"(fail={thresholds.get('depth_fail_ratio_fail')})"
+        )
+    if code == "FAIL_DEPTH_INVALID_MEAN_GT_FAIL":
+        return (
+            f"depth_invalid_mean={metrics.get('depth_invalid_mean')} "
+            f"(fail={thresholds.get('depth_invalid_mean_fail')})"
+        )
+    if code == "WARN_DEPTH_INVALID_MEAN_GT_WARN":
+        return (
+            f"depth_invalid_mean={metrics.get('depth_invalid_mean')} "
+            f"(warn={thresholds.get('depth_invalid_mean_warn')})"
+        )
+    if code == "WARN_DEPTH_TIMESTAMP_MISSING":
+        return f"depth_timestamps_present={streams.get('depth_timestamps_present')}"
+    if code == "WARN_DEPTH_PIXEL_DECODE_UNSUPPORTED":
+        return f"depth_pixels={streams.get('decode_status', {}).get('depth_pixels')}"
+    if code == "WARN_RGB_PIXEL_DECODE_UNSUPPORTED":
+        return f"rgb_pixels={streams.get('decode_status', {}).get('rgb_pixels')}"
+    if code == "FAIL_NO_CLEAN_SEGMENTS_LONG_ENOUGH":
+        return "No strict clean segment met the minimum required duration."
+    return "See raw report for technical details."
+
+
+def _render_reason_table(
+    title: str,
+    severity: str,
+    reasons: list[str],
+    report: dict[str, Any],
+) -> None:
+    _render_header(
+        title,
+        "These are the reasons behind the gate result, with plain-language explanations.",
+        level=3,
+    )
+    rows: list[dict[str, Any]] = []
+    for code in reasons:
+        rows.append(
+            {
+                "severity": severity,
+                "reason_code": code,
+                "meaning": REASON_DESCRIPTIONS.get(code, "No description available for this code yet."),
+                "observed_context": _format_reason_context(code, report),
+            }
+        )
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
 def _render_artifacts(metrics: dict[str, Any], output_dir: Path) -> None:
-    st.subheader("Artifacts")
+    _render_header(
+        "Artifacts",
+        "These are generated files you can open for deeper review.",
+        level=3,
+    )
     artifact_keys = [
         "sync_histogram_path",
         "drop_timeline_path",
         "exposure_debug_csv_path",
+        "exposure_low_clip_frames_dir",
+        "exposure_high_clip_frames_dir",
+        "exposure_flat_and_dark_frames_dir",
+        "exposure_flat_and_bright_frames_dir",
+        "exposure_evidence_error_path",
         "blur_debug_csv_path",
         "depth_debug_csv_path",
         "blur_fail_frames_dir",
         "blur_pass_frames_dir",
         "blur_fail_frames_annotated_dir",
         "blur_pass_frames_annotated_dir",
+        "clean_segments_path",
+        "clean_segments_nosync_path",
         "evidence_manifest_path",
         "benchmarks_path",
     ]
@@ -254,72 +446,119 @@ def _render_artifacts(metrics: dict[str, Any], output_dir: Path) -> None:
     else:
         st.info("No artifact files were produced for this run.")
 
-    for img_key, caption in [
-        ("sync_histogram_path", "Sync histogram"),
-        ("drop_timeline_path", "Drop timeline"),
+    for img_key, caption, help_text in [
+        (
+            "sync_histogram_path",
+            "Sync delta histogram (ms)",
+            "This chart shows how far RGB and depth timestamps are from each other. Smaller values are better.",
+        ),
+        (
+            "drop_timeline_path",
+            "Drop or gap timeline",
+            "This timeline shows where frame timing gaps happened. More gaps usually means less usable data.",
+        ),
     ]:
         rel = metrics.get(img_key)
         if rel:
+            _render_header(caption, help_text, level=3)
             _show_image_if_exists(output_dir / str(rel), caption)
 
-    preview_dir = output_dir / "previews"
-    if preview_dir.exists() and preview_dir.is_dir():
-        preview_images = sorted([p for p in preview_dir.iterdir() if p.suffix.lower() in {".png", ".jpg", ".jpeg"}])
-        if preview_images:
-            st.subheader("Preview Frames")
-            st.image([str(p) for p in preview_images[:8]], caption=[p.name for p in preview_images[:8]], width=220)
+    preview_images: list[Path] = []
+    preview_relpaths = metrics.get("preview_relpaths")
+    if isinstance(preview_relpaths, list) and preview_relpaths:
+        for rel in preview_relpaths:
+            p = output_dir / str(rel)
+            if p.exists() and p.is_file():
+                preview_images.append(p)
+    if not preview_images:
+        preview_dir = output_dir / "previews"
+        if preview_dir.exists() and preview_dir.is_dir():
+            preview_images = [
+                p
+                for p in preview_dir.iterdir()
+                if p.suffix.lower() in {".png", ".jpg", ".jpeg"}
+            ]
+    if preview_images:
+        _render_header(
+            "Preview Frames",
+            "These are context samples. Evidence sections below focus on issue examples and avoid overlap when possible.",
+            level=3,
+        )
+        _show_image_set(preview_images, max_images=12)
 
-    evidence_views = [
-        (
-            "blur_fail_frames_annotated_dir",
-            "blur_fail_frames_dir",
-            "Blur Fail Evidence",
-        ),
-        (
-            "blur_pass_frames_annotated_dir",
-            "blur_pass_frames_dir",
-            "Blur Pass Evidence",
-        ),
+    _render_header(
+        "Blur evidence",
+        "These are example frames used to illustrate blur pass/fail outcomes.",
+        level=3,
+    )
+    blur_groups = [
+        ("Fail examples", "blur_fail_frames_annotated_dir", "blur_fail_frames_dir"),
+        ("Pass examples", "blur_pass_frames_annotated_dir", "blur_pass_frames_dir"),
     ]
-    for annotated_key, raw_key, heading in evidence_views:
-        shown = False
-        ann_rel = metrics.get(annotated_key)
-        if ann_rel:
-            ann_folder = output_dir / str(ann_rel)
-            if ann_folder.exists() and ann_folder.is_dir():
-                ann_images = sorted(
-                    [p for p in ann_folder.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"}]
-                )
-                if ann_images:
-                    st.subheader(f"{heading} (Annotated)")
-                    st.image(
-                        [str(p) for p in ann_images[:8]],
-                        caption=[p.name for p in ann_images[:8]],
-                        width=220,
-                    )
-                    shown = True
-        raw_rel = metrics.get(raw_key)
-        if raw_rel:
-            raw_folder = output_dir / str(raw_rel)
-            if raw_folder.exists() and raw_folder.is_dir():
-                raw_images = sorted(
-                    [p for p in raw_folder.iterdir() if p.suffix.lower() in {".jpg", ".jpeg", ".png"}]
-                )
-                if raw_images:
-                    title = f"{heading} (Raw)" if shown else heading
-                    st.subheader(title)
-                    st.image(
-                        [str(p) for p in raw_images[:8]],
-                        caption=[p.name for p in raw_images[:8]],
-                        width=220,
-                    )
+    any_blur = False
+    for label, ann_key, raw_key in blur_groups:
+        st.markdown(f"**{label}**")
+        rel = metrics.get(ann_key) or metrics.get(raw_key)
+        if rel:
+            folder = output_dir / str(rel)
+            if folder.exists() and folder.is_dir():
+                images = [
+                    p
+                    for p in folder.iterdir()
+                    if p.suffix.lower() in {".jpg", ".jpeg", ".png"}
+                ]
+                if images:
+                    _show_image_set(images, max_images=12)
+                    any_blur = True
+                    continue
+        st.caption("No example frames in this section for this run.")
+    if not any_blur:
+        st.info("No blur example frames were exported for this run.")
+
+    exposure_views = [
+        ("low_clip", "Exposure evidence: low clip", "exposure_low_clip_frames_dir"),
+        ("high_clip", "Exposure evidence: high clip", "exposure_high_clip_frames_dir"),
+        ("flat_and_dark", "Exposure evidence: flat and dark", "exposure_flat_and_dark_frames_dir"),
+        ("flat_and_bright", "Exposure evidence: flat and bright", "exposure_flat_and_bright_frames_dir"),
+    ]
+    counts = metrics.get("exposure_bad_reason_counts", {})
+    for reason, title, key in exposure_views:
+        _render_header(
+            title,
+            "These are example frames for this exposure issue type.",
+            level=3,
+        )
+        reason_count = int(counts.get(reason, 0)) if isinstance(counts, dict) else 0
+        rel = metrics.get(key)
+        if rel:
+            folder = output_dir / str(rel)
+            if folder.exists() and folder.is_dir():
+                images = [
+                    p
+                    for p in folder.iterdir()
+                    if p.suffix.lower() in {".jpg", ".jpeg", ".png"}
+                ]
+                if images:
+                    st.caption("Showing example frames for this issue.")
+                    _show_image_set(images, max_images=None)
+                    continue
+        if reason_count == 0:
+            st.caption("No example frames for this issue in this run.")
+        else:
+            st.caption("This issue appears in this run, but there are no example images here.")
+
+    exposure_error_rel = metrics.get("exposure_evidence_error_path")
+    if exposure_error_rel:
+        exposure_error_path = output_dir / str(exposure_error_rel)
+        if exposure_error_path.exists():
+            st.warning(exposure_error_path.read_text(encoding="utf-8"))
 
     if ADVANCED_MODE:
         manifest_rel = metrics.get("evidence_manifest_path")
         if manifest_rel:
             manifest_path = output_dir / str(manifest_rel)
             if manifest_path.exists() and manifest_path.is_file():
-                st.subheader("Evidence Manifest")
+                _render_header("Evidence Manifest", "Raw deterministic selection manifest.", level=3)
                 try:
                     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
                     rows = []
@@ -348,7 +587,7 @@ def _render_artifacts(metrics: dict[str, Any], output_dir: Path) -> None:
 
 def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
     st.markdown("---")
-    st.header("Latest Analysis Results")
+    st.header("Latest Analysis Results", anchor=False)
     _render_gate_summary(report)
 
     metrics = report.get("metrics", {})
@@ -370,6 +609,7 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
             "vision_ok_ratio",
             "vision_coverage_seconds_est",
         ],
+        explanation="Main quality numbers. In general, lower sync/drop problems and higher coverage are better.",
     )
 
     _render_metrics_table(
@@ -388,6 +628,7 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
             "rgb_timebase_diff_sample_count",
             "rgb_timebase_header_present_ratio",
         ],
+        explanation="Timing details between RGB and depth. Positive offset means depth is later than RGB.",
         hide_none=True,
     )
 
@@ -414,19 +655,41 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
             "exposure_valid_frame_count",
             "depth_valid_frame_count",
         ],
+        explanation="Image/depth quality summary from analyzed sampled frames (not all frames in the MCAP).",
     )
 
-    st.subheader("Exposure Reason Counts")
+    _render_header(
+        "Exposure Reason Counts",
+        "How many analyzed sampled frames matched each exposure issue type.",
+        level=3,
+    )
     st.json(metrics.get("exposure_bad_reason_counts", {}))
 
-    st.subheader("Segments")
-    segments = report.get("segments", [])
-    if segments:
-        st.dataframe(segments, use_container_width=True, hide_index=True)
+    _render_header(
+        "Integrity Segments",
+        "Time ranges that pass timing and sensor-integrity checks.",
+        level=3,
+    )
+    integrity_segments = report.get("segments", [])
+    if integrity_segments:
+        st.dataframe(
+            _normalize_segment_rows(integrity_segments), use_container_width=True, hide_index=True
+        )
     else:
-        st.info("No segments produced.")
+        st.info("No integrity segments produced.")
 
-    st.subheader("Errors")
+    _render_header(
+        "Clean Segments",
+        "Time ranges that also pass quality checks (for segment-only usage).",
+        level=3,
+    )
+    clean_segments = _load_segments_from_metric(metrics, output_dir, "clean_segments_path")
+    if clean_segments:
+        st.dataframe(_normalize_segment_rows(clean_segments), use_container_width=True, hide_index=True)
+    else:
+        st.info("No clean segments produced.")
+
+    _render_header("Errors", "Warnings and errors recorded during analysis.", level=3)
     errors = report.get("errors", [])
     if errors:
         st.dataframe(errors, use_container_width=True, hide_index=True)

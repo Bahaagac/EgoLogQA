@@ -83,6 +83,24 @@ def _validate_config(config: QAConfig) -> None:
         raise ValueError("integrity.out_of_order_warn_ratio must be >= 0")
     if config.segments.min_segment_seconds <= 0:
         raise ValueError("segments.min_segment_seconds must be > 0")
+    if config.thresholds.sync_min_samples < 0:
+        raise ValueError("thresholds.sync_min_samples must be >= 0")
+    if config.thresholds.sync_warn_ms < 0:
+        raise ValueError("thresholds.sync_warn_ms must be >= 0")
+    if config.thresholds.sync_fail_ms < 0:
+        raise ValueError("thresholds.sync_fail_ms must be >= 0")
+    if config.thresholds.sync_fail_ms < config.thresholds.sync_warn_ms:
+        raise ValueError("thresholds.sync_fail_ms must be >= thresholds.sync_warn_ms")
+    if config.thresholds.sync_jitter_warn_ms < 0:
+        raise ValueError("thresholds.sync_jitter_warn_ms must be >= 0")
+    if config.thresholds.sync_drift_warn_ms_per_min < 0:
+        raise ValueError("thresholds.sync_drift_warn_ms_per_min must be >= 0")
+    if config.thresholds.sync_stable_std_max_ms < 0:
+        raise ValueError("thresholds.sync_stable_std_max_ms must be >= 0")
+    if config.thresholds.sync_stable_jitter_p95_max_ms < 0:
+        raise ValueError("thresholds.sync_stable_jitter_p95_max_ms must be >= 0")
+    if config.thresholds.sync_stable_drift_abs_max_ms_per_min < 0:
+        raise ValueError("thresholds.sync_stable_drift_abs_max_ms_per_min must be >= 0")
     if config.thresholds.exposure_roi_margin_ratio < 0:
         raise ValueError("thresholds.exposure_roi_margin_ratio must be >= 0")
     if config.thresholds.exposure_roi_margin_ratio >= 0.5:
@@ -105,5 +123,15 @@ def _validate_config(config: QAConfig) -> None:
         raise ValueError("thresholds.median_bright must be in [0, 255]")
     if not (0.0 <= config.thresholds.dynamic_range_min <= 255.0):
         raise ValueError("thresholds.dynamic_range_min must be in [0, 255]")
+    if not (0.0 <= config.thresholds.depth_invalid_threshold <= 1.0):
+        raise ValueError("thresholds.depth_invalid_threshold must be in [0, 1]")
+    if not (0.0 <= config.thresholds.depth_invalid_mean_warn <= 1.0):
+        raise ValueError("thresholds.depth_invalid_mean_warn must be in [0, 1]")
+    if not (0.0 <= config.thresholds.depth_fail_ratio_fail <= 1.0):
+        raise ValueError("thresholds.depth_fail_ratio_fail must be in [0, 1]")
+    if not (0.0 <= config.thresholds.depth_invalid_mean_fail <= 1.0):
+        raise ValueError("thresholds.depth_invalid_mean_fail must be in [0, 1]")
+    if not (1 <= config.thresholds.pass_exposure_evidence_k <= 64):
+        raise ValueError("thresholds.pass_exposure_evidence_k must be in [1, 64]")
     if not (1 <= config.debug.evidence_frames_k <= 64):
         raise ValueError("debug.evidence_frames_k must be in [1, 64]")

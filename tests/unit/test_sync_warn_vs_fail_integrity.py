@@ -80,3 +80,4 @@ def test_sync_warn_threshold_does_not_shred_integrity_segments(tmp_path: Path) -
     assert result.report["metrics"]["integrity_ok_ratio"] > 0.9
     assert result.report["segments"]
     assert max(seg["duration_s"] for seg in result.report["segments"]) >= 10.0
+    assert result.report["gate"]["recommended_action"] == "FIX_TIME_ALIGNMENT"
