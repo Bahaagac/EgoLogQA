@@ -41,6 +41,7 @@ thresholds:
   high_clip_warn: 0.20
   dynamic_range_min: 10.0
   median_dark: 40.0
+  low_clip_p95_max: 180.0
   median_bright: 215.0
   depth_invalid_threshold: 0.35
   drop_warn_ratio: 0.05

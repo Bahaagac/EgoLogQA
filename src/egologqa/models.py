@@ -78,6 +78,7 @@ class ThresholdsConfig:
     high_clip_warn: float = 0.20
     dynamic_range_min: float = 10.0
     median_dark: float = 40.0
+    low_clip_p95_max: float = 180.0
     median_bright: float = 215.0
 
 
