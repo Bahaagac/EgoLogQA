@@ -14,6 +14,7 @@ from egologqa.io.hf_fetch import list_mcap_files, resolve_cached_file
 from egologqa.kiosk_helpers import (
     allocate_run_dir,
     build_hf_display_label,
+    build_run_results_zip,
     build_timestamped_run_basename,
     ensure_writable_dir,
     human_bytes,
@@ -139,15 +140,6 @@ section[data-testid="stSidebar"] { display: none; }
 .af-val {
     font-family: 'SFMono-Regular','Consolas',monospace;
     font-size: 0.76rem; color: #495057; word-break: break-all;
-}
-
-/* ── Footer ────────────────────────────────────────────────────────── */
-.eq-footer {
-    font-size: 0.75rem; color: #8c919a; border-top: 1px solid #e9ecef;
-    padding-top: 0.6rem; margin-top: 1.2rem;
-}
-.eq-footer code {
-    background: #f0f2f5; padding: 0.08rem 0.3rem; border-radius: 3px; font-size: 0.72rem;
 }
 
 /* ── Tab inner padding ─────────────────────────────────────────────── */
@@ -968,15 +960,55 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
                     except Exception as exc:  # pragma: no cover - UI fallback
                         st.warning(f"Could not parse evidence manifest: {exc}")
 
-    # ━━ FOOTER ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    st.markdown(
-        f'<div class="eq-footer">'
-        f'Run directory: <code>{html.escape(str(output_dir.resolve()))}</code><br>'
-        f'Report: <code>{html.escape(str((output_dir / "report.json").resolve()))}</code>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+    # ━━ RESULTS DOWNLOADS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     st.markdown('<div style="height:0.6rem;"></div>', unsafe_allow_html=True)
+    _sec_label("Results Download")
+
+    report_path = output_dir / "report.json"
+    if report_path.exists() and report_path.is_file():
+        report_bytes = report_path.read_bytes()
+    else:
+        report_bytes = (
+            json.dumps(report, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        )
+
+    key_suffix = hashlib.sha1(str(output_dir.resolve()).encode("utf-8")).hexdigest()[:8]
+    dcol1, dcol2 = st.columns(2)
+    with dcol1:
+        st.download_button(
+            "Download report.json",
+            data=report_bytes,
+            file_name="report.json",
+            mime="application/json",
+            key=f"download_report_{key_suffix}",
+            use_container_width=True,
+        )
+
+    zip_path = output_dir / "run_results.zip"
+    zip_error: str | None = None
+    try:
+        if not zip_path.exists():
+            zip_path = build_run_results_zip(output_dir)
+    except Exception as exc:  # pragma: no cover - UI fallback
+        zip_error = str(exc)
+
+    with dcol2:
+        if zip_error:
+            st.warning(f"Could not prepare run archive: {zip_error}")
+        elif zip_path.exists() and zip_path.is_file():
+            st.download_button(
+                "Download Run Results (.zip)",
+                data=zip_path.read_bytes(),
+                file_name=zip_path.name,
+                mime="application/zip",
+                key=f"download_zip_{key_suffix}",
+                use_container_width=True,
+            )
+        else:
+            st.warning("Run archive is not available for download.")
+
+    st.caption("ZIP includes generated report and artifacts, and excludes source uploads.")
+
     with st.expander("Raw report.json", expanded=False):
         st.json(report)
 

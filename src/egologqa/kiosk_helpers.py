@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 import secrets
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -134,6 +135,33 @@ def stage_uploaded_mcap(uploaded_file: Any, output_dir: Path) -> Path:
 
     staged_path.write_bytes(data)
     return staged_path
+
+
+def build_run_results_zip(output_dir: Path) -> Path:
+    output_dir = Path(output_dir)
+    if not output_dir.exists() or not output_dir.is_dir():
+        raise RuntimeError(f"Run directory does not exist: {output_dir}")
+
+    zip_path = output_dir / "run_results.zip"
+    files_to_include: list[Path] = []
+    for path in sorted(output_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(output_dir)
+        if rel.parts and rel.parts[0] == "input":
+            continue
+        if rel.as_posix() == "run_results.zip":
+            continue
+        files_to_include.append(path)
+
+    try:
+        with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for path in files_to_include:
+                rel = path.relative_to(output_dir).as_posix()
+                zf.write(path, arcname=rel)
+    except Exception as exc:  # pragma: no cover - surfaced in UI
+        raise RuntimeError(f"Failed to create results archive: {exc}") from exc
+    return zip_path
 
 
 def build_timestamped_run_basename(file_name: str, suffix: str | None = None) -> str:

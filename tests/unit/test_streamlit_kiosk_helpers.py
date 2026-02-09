@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import zipfile
 
 import pytest
 
 from egologqa.kiosk_helpers import (
     allocate_run_dir,
     build_hf_display_label,
+    build_run_results_zip,
     build_timestamped_run_basename,
     build_run_basename,
     ensure_writable_dir,
@@ -104,3 +106,55 @@ def test_resolve_source_kind_precedence() -> None:
 def test_ensure_writable_dir(tmp_path: Path) -> None:
     out = ensure_writable_dir(tmp_path / "nested", "runs")
     assert out.exists()
+
+
+def test_build_run_results_zip_includes_artifacts_and_excludes_uploads(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "plots").mkdir(parents=True)
+    (run_dir / "debug").mkdir(parents=True)
+    (run_dir / "input").mkdir(parents=True)
+
+    (run_dir / "report.json").write_text('{"gate":"PASS"}', encoding="utf-8")
+    (run_dir / "plots" / "sync_histogram.png").write_bytes(b"png")
+    (run_dir / "debug" / "blur_samples.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+    (run_dir / "input" / "uploaded_clip.mcap").write_bytes(b"mcap")
+
+    zip_path = build_run_results_zip(run_dir)
+    assert zip_path == run_dir / "run_results.zip"
+    assert zip_path.exists()
+
+    with zipfile.ZipFile(zip_path) as zf:
+        names = sorted(zf.namelist())
+
+    assert "report.json" in names
+    assert "plots/sync_histogram.png" in names
+    assert "debug/blur_samples.csv" in names
+    assert "input/uploaded_clip.mcap" not in names
+    assert "run_results.zip" not in names
+
+
+def test_build_run_results_zip_uses_relative_posix_paths(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    (run_dir / "debug").mkdir(parents=True)
+    (run_dir / "debug" / "x.txt").write_text("ok", encoding="utf-8")
+
+    zip_path = build_run_results_zip(run_dir)
+
+    with zipfile.ZipFile(zip_path) as zf:
+        for name in zf.namelist():
+            assert not name.startswith("/")
+            assert "\\" not in name
+
+
+def test_build_run_results_zip_reuses_name_without_self_including_existing_zip(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True)
+    (run_dir / "report.json").write_text("{}", encoding="utf-8")
+    (run_dir / "run_results.zip").write_bytes(b"old")
+
+    zip_path = build_run_results_zip(run_dir)
+    with zipfile.ZipFile(zip_path) as zf:
+        names = zf.namelist()
+
+    assert "run_results.zip" not in names
+    assert "report.json" in names
