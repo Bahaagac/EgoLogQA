@@ -62,3 +62,22 @@ def test_flat_dark_is_exposure_bad_flat_and_dark() -> None:
     assert rows[0]["exposure_bad"] == 1
     assert "flat_and_dark" in str(rows[0]["reasons"])
     assert metrics["exposure_bad_reason_counts"]["flat_and_dark"] == 1
+
+
+def test_high_clip_detects_channel_clipping_even_when_luma_clip_is_low() -> None:
+    # Yellow-tinted saturation can clip color channels heavily while grayscale
+    # stays below the high-clip pixel threshold.
+    frame = np.zeros((120, 120, 3), dtype=np.uint8)
+    frame[:, :] = np.array([0, 255, 255], dtype=np.uint8)  # BGR yellow
+    th = ThresholdsConfig()
+
+    metrics, _, exposure_ok, rows, _ = compute_rgb_pixel_metrics([frame], th, [0], [0.0])
+    row = rows[0]
+
+    assert exposure_ok == [False]
+    assert row["exposure_bad"] == 1
+    assert "high_clip" in str(row["reasons"])
+    assert float(row["high_clip_luma"]) < th.high_clip_warn
+    assert float(row["high_clip_any_channel"]) > th.high_clip_warn
+    assert float(row["high_clip"]) == float(row["high_clip_any_channel"])
+    assert metrics["exposure_bad_reason_counts"]["high_clip"] == 1
