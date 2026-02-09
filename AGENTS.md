@@ -17,7 +17,7 @@ Primary outputs per run:
 - Gate decision: `PASS` / `WARN` / `FAIL`
 - Ordered fail/warn reason enums
 - Integrity segments (`segments[]`)
-- Optional diagnostics artifacts (`report.md`, plots, previews, CSVs, evidence frames)
+- Optional diagnostics artifacts (`report.md`, plots, previews, CSVs, evidence frames, manifest, benchmarks)
 
 Design intent in current code:
 - Integrity-first segmentation
@@ -38,6 +38,8 @@ Top-level:
 - `scripts/hygiene_check.sh`
 - `scripts/post_change_verify.sh`
 - `scripts/verify_4_mcap.sh`
+- `validation/run_validation.py`
+- `validation/summarize_results.py`
 - `src/egologqa/...`
 - `tests/...`
 - runtime artifact areas (`report_out/`, `out/`, `~/.cache/EgoLogQA/runs`)
@@ -55,6 +57,7 @@ Source package highlights:
 - `src/egologqa/io/reader.py`
 - `src/egologqa/io/hf_fetch.py`
 - `src/egologqa/io/local_fs.py`
+- `src/egologqa/ai_summary.py`
 - `src/egologqa/kiosk_helpers.py`
 - `src/egologqa/ui_text.py`
 
@@ -78,11 +81,12 @@ Canonical commands:
 From `pyproject.toml`:
 - Python `>=3.11,<3.12`
 - `mcap-ros2-support==0.5.5`
-- `huggingface_hub==0.27.1`
+- `huggingface-hub==0.27.1`
 - `numpy==1.26.4`
-- `opencv-python==4.10.0.84`
+- `opencv-python-headless==4.10.0.84`
 - `PyYAML==6.0.2`
 - `streamlit==1.41.1`
+- `google-genai>=0.8.0,<2.0.0`
 - Dev: `pytest==8.3.4`
 
 Lock file:
@@ -92,6 +96,7 @@ Lock file:
 
 Entrypoints:
 - Script: `EgoLogQA` -> `egologqa.cli:main`
+- Script alias: `egologqa` -> `egologqa.cli:main`
 - Module: `python -m egologqa`
 
 Command shape:
@@ -101,19 +106,21 @@ Command shape:
   - `--depth-topic`
   - `--imu-accel-topic`
   - `--imu-gyro-topic`
+- Optional diagnostics flag:
+  - `--bench` (writes `debug/benchmarks.json` and `metrics.benchmarks_path` when successful)
 
 Output path contract:
 - `--output` is a directory path.
-- If file-like value is passed, it is still treated as directory.
+- If a file-like value is passed, it is still treated as directory.
 
 Exit codes:
 - `0` PASS
 - `10` WARN
-- `20` FAIL
-- `30` ERROR path
+- `20` FAIL (non-exception path)
+- `30` ERROR path (config-load or analysis-exception path)
 
 Stdout contract:
-- Human-readable summary lines (`GATE STATUS`, `RECOMMENDED ACTION`, reasons, error groups)
+- Human-readable summary lines (`GATE STATUS`, `RECOMMENDED ACTION`, reasons, warn/error groups)
 - Final machine line: `{"gate": "...", "recommended_action": "...", "report": "..."}`
 
 ## 6) UI contract (Streamlit)
@@ -127,12 +134,16 @@ Current behavior:
 - Synchronous progress updates (no worker queue)
 - Hidden advanced controls only when `EGOLOGQA_UI_ADVANCED=1`
 
+AI summary integration:
+- Enabled by default via `EGOLOGQA_AI_SUMMARY_ENABLED=1`
+- Model override via `EGOLOGQA_GEMINI_MODEL`
+- Key sources: `GOOGLE_API_KEY`, `GEMINI_API_KEY`, or Streamlit secrets
+- Failure paths fall back to deterministic summary/explanation/insight lines
+
 Results rendering:
 - `Overall Result` (PASS/WARNING/FAIL display text)
-- Recommended action block with:
-  - token
-  - plain-language "What to do now"
-  - plain-language "Why"
+- Recommended action block with token + plain-language action + why
+- Quick summary card (AI or deterministic fallback)
 - Structured reason tables with code + meaning + observed context
 - Integrity and clean segment sections
 - Artifact tables and images (plots, previews, evidence)
@@ -332,9 +343,13 @@ Ordered runtime flow in `src/egologqa/pipeline.py`:
 Progress phases:
 - `scan`, `pass1`, `pass2`, `done`, `error`
 
-Evidence decision highlights:
+Evidence/diagnostics behavior highlights:
 - blur evidence can auto-trigger on blur WARN
 - exposure evidence auto-triggers when exposure reason counts > 0 and RGB decode successes > 0
+- evidence manifest (`debug/evidence_manifest.json`) is additive and optional
+- annotated evidence directories are additive and optional (`blur_*_frames_annotated_dir`)
+- benchmarks are opt-in via CLI `--bench` or config `debug.benchmarks_enabled`
+- benchmark write failures remove `benchmarks_path` so report stays consistent
 
 ## 15) Configuration schema (current)
 
@@ -416,18 +431,30 @@ Decode/compute:
 - `RGB_EXPOSURE_DEBUG_UNAVAILABLE`
 - `BLUR_UNAVAILABLE_NO_DECODE`
 
+AI summary subsystem codes:
+- `AI_SUMMARY_DISABLED`
+- `AI_SUMMARY_API_KEY_MISSING`
+- `AI_SUMMARY_REQUEST_FAILED`
+- `AI_SUMMARY_JSON_PARSE_FAILED`
+- `AI_SUMMARY_SCHEMA_INVALID`
+- `AI_SUMMARY_EMPTY`
+- `AI_SUMMARY_SDK_IMPORT_FAILED`
+- `AI_SUMMARY_EMPTY_RESPONSE`
+
 ## 18) Test coverage map (current)
 
 Baseline command:
 - `.venv/bin/python -m pytest -q`
 
-Latest observed status:
-- `98 passed`
+Latest observed status (point-in-time snapshot):
+- `1 failed, 138 passed`
+- failing test: `tests/unit/test_ai_summary.py::test_streamlit_quick_summary_renders_three_ai_lines_and_debug_caption`
 
 Integration:
 - `tests/integration/test_pipeline_inmemory.py`
 
 Unit inventory:
+- `test_ai_summary.py`
 - `test_artifact_paths_relative.py`
 - `test_artifact_plots.py`
 - `test_benchmarks_opt_in.py`
@@ -437,18 +464,21 @@ Unit inventory:
 - `test_blur_formula_lock.py`
 - `test_blur_warn_logic.py`
 - `test_clean_segments_counterfactual.py`
+- `test_decode_cv2_diagnostics_pipeline.py`
 - `test_depth_dtype_warning.py`
 - `test_drop_regions.py`
 - `test_evidence_manifest_pipeline.py`
 - `test_exposure_conditional_saturation.py`
 - `test_exposure_debug_csv.py`
 - `test_exposure_evidence_selection.py`
+- `test_file_summary_metrics.py`
 - `test_frame_flags_sync_alias.py`
 - `test_gate.py`
 - `test_gate_decision_precedence.py`
 - `test_hf_fetch.py`
 - `test_integrity_segments_exposure.py`
 - `test_local_fs.py`
+- `test_low_clip_p95_config.py`
 - `test_nearest_alignment.py`
 - `test_out_of_order.py`
 - `test_pass_exposure_evidence_pipeline.py`
@@ -465,6 +495,7 @@ Unit inventory:
 - `test_time_extraction.py`
 - `test_timebase_diagnostics.py`
 - `test_ui_text.py`
+- `test_upload_staging.py`
 
 ## 19) Repro runbook
 

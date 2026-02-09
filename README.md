@@ -1,220 +1,175 @@
 # EgoLogQA
 
-EgoLogQA is a CLI-first quality-control gate for MicroAGI00-style ROS2 MCAP logs.
+EgoLogQA is a deterministic quality-control analyzer for MicroAGI00-style ROS2 MCAP logs.
+It is designed to answer one operational question quickly: can this capture be used as-is, used partially, or should it be recaptured?
 
-## Stability Contract
+For every run, EgoLogQA always writes a canonical `report.json` and returns a gate decision (`PASS`, `WARN`, or `FAIL`) with ordered reasons.
+It also extracts integrity-based usable segments so good temporal data is not discarded just because RGB/depth pixel decoding is partially unavailable.
+Optional diagnostics (plots, previews, CSVs, evidence frames, manifest, benchmarks) support manual QA triage without changing the top-level report schema.
 
-EgoLogQA guarantees semantic stability for the same input/config:
+The project is CLI-first and also includes a Streamlit kiosk UI for operators.
 
-- Gate and enum reason codes match exactly.
-- Segment boundaries are compared with a 10 ms tolerance.
-- Float metrics are rounded to 4 decimals in `report.json` and compared post-rounding.
+## What You Get From One Run
 
-`report.json` is written with canonical JSON formatting (`sort_keys=true`, fixed separators) and invalid floats are converted to `null`.
+- Gate decision: `PASS`, `WARN`, or `FAIL`
+- Recommended action token:
+  - `USE_FULL_SEQUENCE`
+  - `USE_SEGMENTS_ONLY`
+  - `FIX_TIME_ALIGNMENT`
+  - `RECAPTURE_OR_SKIP`
+- Deterministic `report.json` (always written)
+- Ordered fail/warn reason enums
+- Integrity segments (`segments[]`)
+- Optional diagnostics artifacts (`report.md`, plots, previews, CSV debug files, evidence images, manifest, benchmarks)
 
-Byte-identical output across different machines/OS builds is not guaranteed.
+## Quick Start
 
-## Install
+Install in the project virtualenv:
 
 ```bash
-pip install -e ".[dev]"
+.venv/bin/python -m pip install -e ".[dev]"
 ```
 
-## Analyze
+Analyze one MCAP:
 
 ```bash
-EgoLogQA analyze \
-  --input /path/to/file.mcap \
+.venv/bin/EgoLogQA analyze \
+  --input /absolute/path/to/file.mcap \
   --output out/run1 \
   --config configs/microagi00_ros2.yaml
 ```
 
-Default shipped config: `configs/microagi00_ros2.yaml` (explicit MicroAGI00 ROS2 topics).
+Run tests:
 
-Segment extraction is integrity-based (`sync + drop/gap + IMU`) so noisy pixel
-heuristics cannot erase all usable time. Vision quality is reported separately
-through metrics and WARN reasons.
+```bash
+.venv/bin/python -m pytest -q
+```
 
-Exposure diagnostics are exported to `debug/exposure_samples.csv` by default.
+Run the UI:
 
-Recommended actions:
+```bash
+.venv/bin/streamlit run app/streamlit_app.py
+```
 
-- `USE_FULL_SEQUENCE`
-- `USE_SEGMENTS_ONLY`
-- `FIX_TIME_ALIGNMENT`
-- `RECAPTURE_OR_SKIP`
+## How It Works
 
-Note: `thresholds.contrast_min`, `thresholds.low_clip_threshold`, and
-`thresholds.high_clip_threshold` remain in config for backward compatibility but
-are not used by the v1.3 exposure classifier.
-Use `thresholds.low_clip_pixel_value` and `thresholds.high_clip_pixel_value`
-to control clip-value cutoffs for exposure diagnostics/classification.
+EgoLogQA uses a two-pass pipeline:
 
-Output directory contains:
+1. Pass 1 (`scan`/`pass1`): topic scan, timestamp extraction, drop/gap and sync diagnostics, integrity-time metrics, sampling plan.
+2. Pass 2 (`pass2`): sampled RGB/depth decode, blur/exposure/depth metrics, frame flags, segment extraction, gate decision.
 
-- `report.json` (always)
-- `report.md`
-- `previews/` (sample RGB PNGs when decode succeeds)
-- `plots/sync_histogram.png` (when sync deltas are available)
-- `plots/drop_timeline.png` (when RGB timestamps are available)
-- `debug/exposure_samples.csv` (when RGB decode succeeds and debug export is enabled)
-- `debug/exposure_low_clip_frames/*.jpg` (when exposure evidence export is active)
-- `debug/exposure_high_clip_frames/*.jpg` (when exposure evidence export is active)
-- `debug/exposure_flat_and_dark_frames/*.jpg` (when exposure evidence export is active)
-- `debug/exposure_flat_and_bright_frames/*.jpg` (when exposure evidence export is active)
-- `debug/exposure_evidence_error.txt` (when exposure evidence selection falls back)
-- `debug/blur_samples.csv` (when blur/depth debug CSV export is enabled)
-- `debug/depth_samples.csv` (when blur/depth debug CSV export is enabled)
-- `debug/blur_fail_frames/*.jpg` (when evidence export is enabled or blur WARN auto-export triggers)
-- `debug/blur_pass_frames/*.jpg` (when evidence export is enabled or blur WARN auto-export triggers)
-- `debug/blur_fail_frames_annotated/*.jpg` (when `debug.write_annotated_evidence=true`)
-- `debug/blur_pass_frames_annotated/*.jpg` (when `debug.write_annotated_evidence=true`)
-- `debug/clean_segments.json` (WARN-strict clean segments)
-- `debug/clean_segments_nosync.json` (counterfactual clean segments with sync forced-good)
-- `debug/evidence_manifest.json` (when `debug.write_evidence_manifest=true`)
-- `debug/benchmarks.json` (when `--bench` or `debug.benchmarks_enabled=true`)
+Then it writes artifacts deterministically:
 
-All artifact paths stored in `report.json` are output-directory-relative POSIX paths (for example `plots/sync_histogram.png`).
+1. Integrity segments (`report["segments"]`)
+2. Clean segment artifacts (`clean_segments.json`, `clean_segments_nosync.json`)
+3. Optional evidence/previews/plots
+4. Canonical `report.json` (always) and best-effort `report.md`
 
-Optional additive diagnostics:
+## CLI Contract
 
-- `EgoLogQA analyze --bench ...` writes benchmark timings to `debug/benchmarks.json`.
-- `debug.write_evidence_manifest` writes a deterministic evidence manifest.
-- `debug.write_annotated_evidence` writes annotated evidence copies without modifying raw evidence frames.
+Entrypoints:
 
-## Blur Metric Contract
+- `EgoLogQA` (script)
+- `egologqa` (script alias)
+- `.venv/bin/python -m egologqa` (module)
 
-Blur is computed deterministically with the following exact formula:
+Command shape:
 
-- `gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)` (no resize, no normalization)
-- ROI uses `thresholds.blur_roi_margin_ratio` with pixel margin `m = int(min(H, W) * ratio)`
-- fallback to full frame when ROI would be empty
-- `blur_value = cv2.Laplacian(gray_roi, cv2.CV_64F).var()`
-- `blur_ok = (blur_value >= thresholds.blur_threshold_min)` (fixed threshold, no adaptive gating)
+```bash
+EgoLogQA analyze --input <mcap> --output <output_dir> [--config <yaml>] [--rgb-topic ...] [--depth-topic ...] [--imu-accel-topic ...] [--imu-gyro-topic ...] [--bench]
+```
 
-`blur_threshold_min` default (`80.0`) is tuned for 1080p MicroAGI00-style streams and may require retuning for other resolutions.
+Rules:
 
-Blur WARN rule:
-
-- `WARN_BLUR_FAIL_RATIO_GT_WARN` triggers only when
-  `blur_fail_ratio > thresholds.blur_fail_warn_ratio`
-- blur never triggers FAIL in v1.3
-- if no valid decoded RGB frames are available for blur, `blur_fail_ratio` is null and
-  `errors[]` includes `BLUR_UNAVAILABLE_NO_DECODE`
-
-Sync diagnostics:
-
-- signed sync delta is `depth_time - rgb_time`
-- positive signed offset means depth is later than RGB
-- when stable offset is detected, action can be `FIX_TIME_ALIGNMENT`
-
-Integrity segments remain available for context. FAIL/no-clean decisions are based on WARN-strict clean segments.
-
-## Git Hygiene
-
-Runtime analysis artifacts are intentionally local and not tracked by git.
-
-- Ignored runtime output directories include `report_out/` and `out/`.
-- Generated previews (`previews/*.png`), plots, CSV debug files, and reports should not be committed.
-- If you need a static artifact for documentation, copy it intentionally into a dedicated non-runtime location (for example `examples/`).
+- `--input` and `--output` are required.
+- `--output` is always treated as a directory path.
+- `--bench` enables `debug/benchmarks.json` and sets `metrics.benchmarks_path` when successful.
 
 Exit codes:
 
-- `0` PASS
-- `10` WARN
-- `20` FAIL
-- `30` ERROR
+- `0` -> PASS
+- `10` -> WARN
+- `20` -> FAIL (non-exception path)
+- `30` -> ERROR path (config/exception)
 
-## Streamlit UI
+## Understanding Outputs
 
-```bash
-./.venv/bin/streamlit run app/streamlit_app.py
-```
+### Fixed `report.json` top-level keys
 
-Run from repo root so local `.streamlit/` config is loaded.
+The top-level keys are contract-locked:
 
-The default UI is kiosk-style with two tabs:
+- `tool`
+- `input`
+- `streams`
+- `time`
+- `sampling`
+- `metrics`
+- `gate`
+- `segments`
+- `config_used`
+- `errors`
 
-- One instruction line
-- `Hugging Face` tab:
-  - `.mcap` dropdown (with file-size labels)
-  - tab-specific Analyze button
-- `Local disk` tab:
-  - browser upload (`st.file_uploader`) for one `.mcap` file
-  - uploaded filename + size preview
-  - tab-specific Analyze button
-- Progress + full same-page results after each run
+### Key artifact outputs
 
-No dataset/revision/prefix/token/cache controls are shown by default.
-`Analyze` is disabled until a valid source is selected (HF dropdown choice or Local upload).
-Local disk mode stages the uploaded file under the run directory before analysis.
+Typical output directory contents include:
 
-Defaults:
+- `report.json` (always)
+- `report.md` (best effort)
+- `previews/*.png` (when preview export is enabled and decode succeeds)
+- `plots/sync_histogram.png` and `plots/drop_timeline.png` (when data is available)
+- `debug/exposure_samples.csv`, `debug/blur_samples.csv`, `debug/depth_samples.csv` (when enabled/data available)
+- `debug/clean_segments.json`
+- `debug/clean_segments_nosync.json`
+- `debug/evidence_manifest.json` (optional)
+- `debug/benchmarks.json` (optional)
 
-- HF dataset id: `MicroAGI-Labs/MicroAGI00`
-- HF revision: `main`
-- HF prefix: `raw_mcaps/`
-- HF cache dir: `~/.cache/EgoLogQA/hf_mcaps`
-- Runs dir: `~/.cache/EgoLogQA/runs`
+Path contract:
 
-Env overrides:
+- Artifact paths stored in `report.json` metrics are output-directory-relative POSIX paths.
 
-- `EGOLOGQA_HF_REPO_ID`
-- `EGOLOGQA_HF_REVISION`
-- `EGOLOGQA_HF_PREFIX`
-- `EGOLOGQA_HF_CACHE_DIR`
-- `EGOLOGQA_RUNS_DIR`
-- `EGOLOGQA_AI_SUMMARY_ENABLED` (`1` by default, set `0` to disable AI summary)
-- `EGOLOGQA_GEMINI_MODEL` (optional override; default is `DEFAULT_GEMINI_MODEL` in `src/egologqa/ai_summary.py`)
-- `HF_TOKEN` (optional, not shown in UI)
-- `GOOGLE_API_KEY` or `GEMINI_API_KEY` (optional, for Gemini summary)
+### Recommended action tokens
 
-Developer-only advanced panel:
+- `USE_FULL_SEQUENCE`: use the full recording.
+- `USE_SEGMENTS_ONLY`: use only clean/integrity segments.
+- `FIX_TIME_ALIGNMENT`: sync pattern appears stably offset and likely fixable.
+- `RECAPTURE_OR_SKIP`: data quality is not sufficient for safe downstream use.
 
-- Set `EGOLOGQA_UI_ADVANCED=1`
-- Enables manual Hugging Face list refresh and error details
+## Determinism and Stability Contract
 
-### AI Summary (Gemini)
+EgoLogQA guarantees semantic stability for equivalent input/config/runtime conditions:
 
-The main results page includes a quick summary with three AI lines plus one deterministic action line per completed run:
+- `report.json` is canonicalized (sorted keys, fixed separators).
+- Floats are rounded to 4 decimals.
+- NaN/Inf values are sanitized to `null`.
+- Deterministic ordering is used in gate reasons and artifact selection.
 
-- Line 1 (AI): outcome summary (`summary_line`)
-- Line 2 (AI): primary-cause explanation (`explanation_line`)
-- Line 3 (AI): secondary/unusual signal (`insight_line`)
-- Action line (deterministic): gate-action guidance (`action_line`)
+Byte-identical output across different machines/OS builds is not guaranteed.
 
-Behavior:
+## Streamlit UI (Kiosk)
 
-- The feature is UI-only and does not modify `report.json`.
-- Gemini receives a project brief plus the full analysis `report.json` content for context.
-- If API key, SDK, network, or model response fails, the app falls back to deterministic summary, explanation, and insight lines.
-- API key precedence is: `GOOGLE_API_KEY`, `GEMINI_API_KEY`, then `st.secrets`.
-- Model resolution precedence is: explicit override argument, then `EGOLOGQA_GEMINI_MODEL`, then `DEFAULT_GEMINI_MODEL`.
+The UI has two source tabs:
 
-## Validation Pack
+- `Hugging Face` dataset file selection
+- `Local disk` single-file upload (staged into the run directory)
 
-Deterministic validation tooling lives under `validation/`:
+Behavior and toggles:
 
-- `validation/run_validation.py`
-- `validation/summarize_results.py`
-- `validation/labels_template.csv`
+- Analyze is disabled until a valid file selection exists.
+- Advanced controls are hidden unless `EGOLOGQA_UI_ADVANCED=1`.
+- AI summary is enabled by default (`EGOLOGQA_AI_SUMMARY_ENABLED=1`) and can use `EGOLOGQA_GEMINI_MODEL`.
+- If AI summary fails (missing key, SDK/network/model issues), UI falls back to deterministic summary lines.
 
-Streamlit log noise suppression:
+## Current Known Baseline (Point-in-Time)
 
-- `.streamlit/config.toml` sets logger level to `error`
-- `.streamlit/config.toml` sets `server.maxUploadSize = 500` (MB)
-- `.streamlit/secrets.toml` must stay local/untracked; configure production secrets in Streamlit Community Cloud -> App Settings -> Secrets
-- Fallback launch flag if needed: `--logger.level=error`
+At commit `ed48f2256d08326ed223bc0b7822721c9b93932d` (audited on 2026-02-09):
 
-Deployment note:
+- Test command: `.venv/bin/python -m pytest -q`
+- Result: `1 failed, 138 passed`
+- Failing test: `tests/unit/test_ai_summary.py::test_streamlit_quick_summary_renders_three_ai_lines_and_debug_caption`
 
-- Streamlit Community Cloud is the supported free hosting target for this app.
-- Vercel is not a target host for this Streamlit runtime.
+Treat this as a snapshot, not a permanent target.
 
-### Troubleshooting: Deployed app shows no images
+## Where Technical Detail Lives
 
-When the hosted UI renders no previews/evidence images, verify decode health first:
-
-- Check `metrics.rgb_decode_success_count` in `report.json` (must be greater than `0` for image artifacts).
-- Check `errors[]` contexts for decode warnings (`RGB_DECODE_FAIL`, `DEPTH_PNG_IMDECODE_FAIL`, `BLUR_UNAVAILABLE_NO_DECODE`) and inspect `cv2_available` / `cv2_import_error`.
-- Use Python `3.11` on Streamlit Community Cloud and redeploy after the `opencv-python-headless` dependency switch.
+- Contributor/agent operational reference: `/Users/bahaagac/Documents/EgoLogQA/AGENTS.md`
+- Commit-locked master technical documentation: `/Users/bahaagac/Documents/EgoLogQA/docs/EGOLOGQA_MASTER_DOCUMENTATION.md`
