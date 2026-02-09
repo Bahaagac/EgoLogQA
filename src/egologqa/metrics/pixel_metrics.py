@@ -158,6 +158,7 @@ def compute_rgb_pixel_metrics(
             bad_saturation_dark = (
                 low_clip > thresholds.low_clip_warn
                 and p50 < thresholds.median_dark
+                and p95 < thresholds.low_clip_p95_max
             )
             bad_saturation_bright = (
                 high_clip > thresholds.high_clip_warn

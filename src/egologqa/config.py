@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from dataclasses import asdict, fields, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -119,6 +120,10 @@ def _validate_config(config: QAConfig) -> None:
         raise ValueError("thresholds.high_clip_warn must be in [0, 1]")
     if not (0.0 <= config.thresholds.median_dark <= 255.0):
         raise ValueError("thresholds.median_dark must be in [0, 255]")
+    if not math.isfinite(config.thresholds.low_clip_p95_max):
+        raise ValueError("thresholds.low_clip_p95_max must be finite")
+    if not (0.0 <= config.thresholds.low_clip_p95_max <= 255.0):
+        raise ValueError("thresholds.low_clip_p95_max must be in [0, 255]")
     if not (0.0 <= config.thresholds.median_bright <= 255.0):
         raise ValueError("thresholds.median_bright must be in [0, 255]")
     if not (0.0 <= config.thresholds.dynamic_range_min <= 255.0):
