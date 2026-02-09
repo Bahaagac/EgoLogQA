@@ -198,6 +198,5 @@ At commit `be1c8460a28129f54ea4fcc35fefa3fd5e204fe3`:
 
 ## Where To Read More
 
-- Full commit-locked master spec (private/local): `docs/EGOLOGQA_MASTER_DOCUMENTATION.md`
 - Operational contributor guide: `AGENTS.md`
 - Validation tooling notes: `validation/README.md`
