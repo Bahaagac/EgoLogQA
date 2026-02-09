@@ -170,7 +170,6 @@ def resolve_cached_file(
             revision=revision,
             token=token or None,
             local_dir=str(cache_root),
-            local_dir_use_symlinks=False,
         )
     except Exception as exc:
         message = str(exc)

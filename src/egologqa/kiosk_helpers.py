@@ -97,13 +97,38 @@ def stage_uploaded_mcap(uploaded_file: Any, output_dir: Path) -> Path:
     staged_dir.mkdir(parents=True, exist_ok=True)
     staged_path = staged_dir / staged_name
 
+    if hasattr(uploaded_file, "seek"):
+        try:
+            uploaded_file.seek(0)
+        except Exception:
+            pass
+
+    if hasattr(uploaded_file, "read"):
+        chunk_size = 8 * 1024 * 1024
+        with staged_path.open("wb") as f:
+            supports_sized_read = True
+            while True:
+                if supports_sized_read:
+                    try:
+                        chunk = uploaded_file.read(chunk_size)
+                    except TypeError:
+                        supports_sized_read = False
+                        chunk = uploaded_file.read()
+                else:
+                    chunk = uploaded_file.read()
+                if not chunk:
+                    break
+                f.write(bytes(chunk))
+                if not supports_sized_read:
+                    break
+        if staged_path.exists() and staged_path.stat().st_size > 0:
+            return staged_path
+
     data: bytes
-    if hasattr(uploaded_file, "getbuffer"):
-        data = bytes(uploaded_file.getbuffer())
-    elif hasattr(uploaded_file, "getvalue"):
+    if hasattr(uploaded_file, "getvalue"):
         data = bytes(uploaded_file.getvalue())
-    elif hasattr(uploaded_file, "read"):
-        data = bytes(uploaded_file.read())
+    elif hasattr(uploaded_file, "getbuffer"):
+        data = bytes(uploaded_file.getbuffer())
     else:
         raise RuntimeError("Uploaded file object is unsupported.")
 

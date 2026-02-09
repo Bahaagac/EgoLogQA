@@ -37,6 +37,31 @@ class _ReadUpload:
         return self._payload
 
 
+class _ChunkedReadUpload:
+    def __init__(self, name: str, payload: bytes):
+        self.name = name
+        self.size = len(payload)
+        self._payload = payload
+        self._offset = 0
+        self.read_sizes: list[int] = []
+
+    def seek(self, offset: int, _whence: int = 0) -> int:
+        self._offset = max(0, offset)
+        return self._offset
+
+    def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
+        if self._offset >= len(self._payload):
+            return b""
+        if size is None or size < 0:
+            end = len(self._payload)
+        else:
+            end = min(len(self._payload), self._offset + size)
+        chunk = self._payload[self._offset:end]
+        self._offset = end
+        return chunk
+
+
 class _UnsupportedUpload:
     def __init__(self):
         self.name = "broken.mcap"
@@ -75,3 +100,15 @@ def test_stage_uploaded_mcap_rejects_missing_upload(tmp_path: Path) -> None:
 def test_stage_uploaded_mcap_rejects_unsupported_upload_object(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="unsupported"):
         stage_uploaded_mcap(_UnsupportedUpload(), tmp_path)
+
+
+def test_stage_uploaded_mcap_supports_chunked_read(tmp_path: Path) -> None:
+    payload = b"a" * (8 * 1024 * 1024 + 17)
+    uploaded = _ChunkedReadUpload("chunked.mcap", payload)
+
+    staged = stage_uploaded_mcap(uploaded, tmp_path)
+
+    assert staged.exists()
+    assert staged.read_bytes() == payload
+    assert len(uploaded.read_sizes) >= 2
+    assert uploaded.read_sizes[0] == 8 * 1024 * 1024
