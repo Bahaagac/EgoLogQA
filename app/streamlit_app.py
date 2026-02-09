@@ -654,6 +654,10 @@ def _render_full_results(report: dict[str, Any], output_dir: Path, ai_summary: d
         insight_line = "No secondary anomaly signal was identified for this run."
 
     action_line = str(summary_payload.get("action_line") or deterministic_action_line(action_token)).strip()
+    source_value = str(summary_payload.get("source") or "").strip().lower()
+    source_label = "Gemini" if source_value == "gemini" else "Deterministic fallback"
+    summary_error_code = str(summary_payload.get("error_code") or "").strip()
+
     st.markdown(
         '<div class="act-card">'
         '<div class="act-lbl">Quick Summary</div>'
@@ -665,6 +669,8 @@ def _render_full_results(report: dict[str, Any], output_dir: Path, ai_summary: d
         '</div>',
         unsafe_allow_html=True,
     )
+    if ADVANCED_MODE and source_label == "Deterministic fallback" and summary_error_code:
+        st.caption(f"Debug: {summary_error_code}")
 
     # Reason cards (compact, only when present)
     if gate_name == "FAIL" and fail_reasons:

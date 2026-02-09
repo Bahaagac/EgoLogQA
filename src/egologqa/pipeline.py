@@ -50,6 +50,9 @@ from egologqa.time import extract_header_stamp_ns, extract_stamp_ns
 
 
 ProgressCallback = Callable[[dict[str, Any]], None]
+MAX_BATCH_FRAME_CACHE_SAMPLES = 64
+_DEFAULT_COMPUTE_RGB_PIXEL_METRICS = compute_rgb_pixel_metrics
+_DEFAULT_COMPUTE_DEPTH_PIXEL_METRICS = compute_depth_pixel_metrics
 
 
 @dataclass
@@ -393,6 +396,7 @@ def analyze_file(
         rgb_decode_error_by_pos: dict[int, str] = {}
         depth_decode_error_by_pos: dict[int, str] = {}
         depth_non_uint16_positions: list[int] = []
+        depth_row_by_pos: dict[int, dict[str, Any]] = {}
         cv2_probe_available, cv2_import_error = _cv2_probe()
         report["metrics"]["cv2_available"] = cv2_probe_available
         if cv2_import_error is not None:
@@ -406,6 +410,22 @@ def analyze_file(
         for pos, idx in depth_index_by_sample_pos.items():
             sample_pos_by_depth_idx.setdefault(idx, []).append(pos)
 
+        sampled_count = len(sampled_rgb_indices)
+        use_batch_frame_cache = (
+            sampled_count <= MAX_BATCH_FRAME_CACHE_SAMPLES
+            or compute_rgb_pixel_metrics is not _DEFAULT_COMPUTE_RGB_PIXEL_METRICS
+            or compute_depth_pixel_metrics is not _DEFAULT_COMPUTE_DEPTH_PIXEL_METRICS
+        )
+
+        decoded_rgb_positions: list[int] = []
+        decoded_depth_positions: list[int] = []
+        blur_ok = [True] * sampled_count
+        exposure_ok = [True] * sampled_count
+        depth_ok = [True] * sampled_count
+        exposure_rows: list[dict[str, float | int | str]] = []
+        exposure_compute_errors: list[dict[str, str | int | float]] = []
+        depth_invalid_ratios: list[float] = []
+
         rgb_valid_idx = -1
         depth_valid_idx = -1
         pixel_topics = {t for t in [selected.rgb_topic, selected.depth_topic] if t}
@@ -416,13 +436,38 @@ def analyze_file(
                     rgb_valid_idx += 1
                     if rgb_valid_idx in rgb_targets:
                         frame, err = decode_rgb_message(rec.msg)
+                        sample_positions = sample_pos_by_rgb_idx.get(rgb_valid_idx, [])
                         if err is None and frame is not None:
-                            for pos in sample_pos_by_rgb_idx.get(rgb_valid_idx, []):
-                                rgb_frames_by_pos[pos] = frame
+                            if use_batch_frame_cache:
+                                for pos in sample_positions:
+                                    rgb_frames_by_pos[pos] = frame
+                            else:
+                                for pos in sample_positions:
+                                    decoded_rgb_positions.append(pos)
+                                    (
+                                        _rgb_metrics_one,
+                                        blur_ok_one,
+                                        exposure_ok_one,
+                                        exposure_rows_one,
+                                        exposure_errors_one,
+                                    ) = compute_rgb_pixel_metrics(
+                                        [frame],
+                                        cfg.thresholds,
+                                        sample_indices=[pos],
+                                        sample_times_ms=[sampled_rgb_times_ms[pos]],
+                                    )
+                                    if blur_ok_one:
+                                        blur_ok[pos] = bool(blur_ok_one[0])
+                                    if exposure_ok_one:
+                                        exposure_ok[pos] = bool(exposure_ok_one[0])
+                                    if exposure_rows_one:
+                                        exposure_rows.extend(exposure_rows_one)
+                                    if exposure_errors_one:
+                                        exposure_compute_errors.extend(exposure_errors_one)
                         else:
                             code = err or "RGB_DECODE_FAIL"
                             rgb_decode_errors[code] = rgb_decode_errors.get(code, 0) + 1
-                            for pos in sample_pos_by_rgb_idx.get(rgb_valid_idx, []):
+                            for pos in sample_positions:
                                 rgb_decode_error_by_pos[pos] = code
             elif rec.topic == selected.depth_topic:
                 t_ns, _, _ = extract_stamp_ns(rec.msg, rec.log_time_ns)
@@ -430,47 +475,75 @@ def analyze_file(
                     depth_valid_idx += 1
                     if depth_valid_idx in depth_targets:
                         frame, err = decode_depth_message(rec.msg)
+                        sample_positions = sample_pos_by_depth_idx.get(depth_valid_idx, [])
                         if err is None and frame is not None:
-                            for pos in sample_pos_by_depth_idx.get(depth_valid_idx, []):
-                                depth_frames_by_pos[pos] = frame
+                            if use_batch_frame_cache:
+                                for pos in sample_positions:
+                                    depth_frames_by_pos[pos] = frame
+                            else:
+                                invalid_ratio = float(np.mean(frame == 0))
+                                min_depth = int(np.min(frame))
+                                max_depth = int(np.max(frame))
+                                dtype = str(frame.dtype)
+                                for pos in sample_positions:
+                                    decoded_depth_positions.append(pos)
+                                    depth_invalid_ratios.append(invalid_ratio)
+                                    depth_ok[pos] = invalid_ratio <= cfg.thresholds.depth_invalid_threshold
+                                    depth_row_by_pos[pos] = {
+                                        "invalid_ratio": invalid_ratio,
+                                        "min_depth": min_depth,
+                                        "max_depth": max_depth,
+                                        "dtype": dtype,
+                                    }
                         else:
                             code = err or "DEPTH_PNG_IMDECODE_FAIL"
                             depth_decode_errors[code] = depth_decode_errors.get(code, 0) + 1
-                            for pos in sample_pos_by_depth_idx.get(depth_valid_idx, []):
+                            for pos in sample_positions:
                                 depth_decode_error_by_pos[pos] = code
                                 if code == "DEPTH_UNEXPECTED_DTYPE":
                                     depth_non_uint16_positions.append(pos)
 
-        sampled_count = len(sampled_rgb_indices)
-        decoded_rgb_positions = sorted(rgb_frames_by_pos.keys())
-        decoded_rgb_frames = [rgb_frames_by_pos[pos] for pos in decoded_rgb_positions]
-        decoded_rgb_times_ms = [sampled_rgb_times_ms[pos] for pos in decoded_rgb_positions]
-        decoded_depth_positions = sorted(depth_frames_by_pos.keys())
-        decoded_depth_frames = [depth_frames_by_pos[pos] for pos in decoded_depth_positions]
+        if use_batch_frame_cache:
+            decoded_rgb_positions = sorted(rgb_frames_by_pos.keys())
+            decoded_rgb_frames = [rgb_frames_by_pos[pos] for pos in decoded_rgb_positions]
+            decoded_rgb_times_ms = [sampled_rgb_times_ms[pos] for pos in decoded_rgb_positions]
+            decoded_depth_positions = sorted(depth_frames_by_pos.keys())
+            decoded_depth_frames = [depth_frames_by_pos[pos] for pos in decoded_depth_positions]
 
-        rgb_metrics, blur_ok_partial, exposure_ok_partial, exposure_rows, exposure_compute_errors = compute_rgb_pixel_metrics(
-            decoded_rgb_frames,
-            cfg.thresholds,
-            sample_indices=decoded_rgb_positions,
-            sample_times_ms=decoded_rgb_times_ms,
-        )
-        depth_metrics, depth_ok_partial = compute_depth_pixel_metrics(
-            decoded_depth_frames, cfg.thresholds
-        )
+            (
+                rgb_metrics,
+                blur_ok_partial,
+                exposure_ok_partial,
+                exposure_rows,
+                exposure_compute_errors,
+            ) = compute_rgb_pixel_metrics(
+                decoded_rgb_frames,
+                cfg.thresholds,
+                sample_indices=decoded_rgb_positions,
+                sample_times_ms=decoded_rgb_times_ms,
+            )
+            depth_metrics, depth_ok_partial = compute_depth_pixel_metrics(
+                decoded_depth_frames, cfg.thresholds
+            )
 
-        blur_ok = [True] * sampled_count
-        exposure_ok = [True] * sampled_count
-        depth_ok = [True] * sampled_count
-        for idx, pos in enumerate(decoded_rgb_positions):
-            blur_ok[pos] = blur_ok_partial[idx]
-            exposure_ok[pos] = exposure_ok_partial[idx]
-        for idx, pos in enumerate(decoded_depth_positions):
-            depth_ok[pos] = depth_ok_partial[idx]
+            for idx, pos in enumerate(decoded_rgb_positions):
+                blur_ok[pos] = blur_ok_partial[idx]
+                exposure_ok[pos] = exposure_ok_partial[idx]
+            for idx, pos in enumerate(decoded_depth_positions):
+                depth_ok[pos] = depth_ok_partial[idx]
+        else:
+            decoded_rgb_positions = sorted(set(decoded_rgb_positions))
+            decoded_depth_positions = sorted(set(decoded_depth_positions))
+            rgb_metrics = _summarize_rgb_metrics_from_rows(exposure_rows, cfg.thresholds)
+            depth_metrics = _summarize_depth_metrics(depth_invalid_ratios, cfg.thresholds)
+
+        decoded_rgb_position_set = set(decoded_rgb_positions)
+        decoded_depth_position_set = set(decoded_depth_positions)
 
         report["metrics"].update(rgb_metrics)
         report["metrics"].update(depth_metrics)
         if "blur_valid_frame_count" not in rgb_metrics:
-            report["metrics"]["blur_valid_frame_count"] = len(decoded_rgb_frames)
+            report["metrics"]["blur_valid_frame_count"] = len(decoded_rgb_positions)
         if "exposure_valid_frame_count" not in rgb_metrics:
             report["metrics"]["exposure_valid_frame_count"] = len(exposure_rows)
 
@@ -483,7 +556,7 @@ def analyze_file(
         report["metrics"]["rgb_decode_success_count"] = rgb_decode_success_count
         report["metrics"]["depth_decode_attempt_count"] = depth_decode_attempt_count
         report["metrics"]["depth_decode_success_count"] = depth_decode_success_count
-        report["metrics"]["depth_valid_frame_count"] = len(decoded_depth_frames)
+        report["metrics"]["depth_valid_frame_count"] = len(decoded_depth_positions)
 
         rgb_decode_supported = len(decoded_rgb_positions) > 0
         depth_decode_supported = len(decoded_depth_positions) > 0
@@ -493,7 +566,6 @@ def analyze_file(
         report["streams"]["decode_status"]["depth_pixels"] = (
             "supported" if depth_decode_supported else "unsupported"
         )
-
         if not rgb_decode_supported:
             code = _max_error_code(rgb_decode_errors, "RGB_DECODE_FAIL")
             errors.append(
@@ -585,7 +657,7 @@ def analyze_file(
                         "Exposure debug CSV could not be generated because no exposure rows were available.",
                         {
                             "rgb_decode_supported": rgb_decode_supported,
-                            "decoded_rgb_frames": len(decoded_rgb_frames),
+                            "decoded_rgb_frames": len(decoded_rgb_positions),
                         },
                     )
                 )
@@ -605,7 +677,7 @@ def analyze_file(
         blur_rows: list[dict[str, Any]] = []
         blur_threshold = report["metrics"].get("blur_threshold")
         for pos in range(sampled_count):
-            decode_ok = pos in rgb_frames_by_pos
+            decode_ok = pos in decoded_rgb_position_set
             blur_value = blur_value_by_pos.get(pos)
             row: dict[str, Any] = {
                 "sample_i": pos,
@@ -625,8 +697,7 @@ def analyze_file(
 
         depth_rows: list[dict[str, Any]] = []
         for pos in sorted(depth_index_by_sample_pos.keys()):
-            decode_ok = pos in depth_frames_by_pos
-            frame = depth_frames_by_pos.get(pos)
+            decode_ok = pos in decoded_depth_position_set
             depth_row: dict[str, Any] = {
                 "sample_i": pos,
                 "t_ms": float(sampled_rgb_times_ms[pos]),
@@ -637,11 +708,19 @@ def analyze_file(
                 "dtype": "",
                 "error_code": depth_decode_error_by_pos.get(pos, ""),
             }
-            if decode_ok and frame is not None:
-                depth_row["invalid_ratio"] = float(np.mean(frame == 0))
-                depth_row["min_depth"] = int(np.min(frame))
-                depth_row["max_depth"] = int(np.max(frame))
-                depth_row["dtype"] = str(frame.dtype)
+            stats = depth_row_by_pos.get(pos)
+            if stats is not None:
+                depth_row["invalid_ratio"] = float(stats["invalid_ratio"])
+                depth_row["min_depth"] = int(stats["min_depth"])
+                depth_row["max_depth"] = int(stats["max_depth"])
+                depth_row["dtype"] = str(stats["dtype"])
+            elif decode_ok:
+                frame = depth_frames_by_pos.get(pos)
+                if frame is not None:
+                    depth_row["invalid_ratio"] = float(np.mean(frame == 0))
+                    depth_row["min_depth"] = int(np.min(frame))
+                    depth_row["max_depth"] = int(np.max(frame))
+                    depth_row["dtype"] = str(frame.dtype)
             depth_rows.append(depth_row)
 
         if cfg.debug.export_blur_csv:
@@ -658,14 +737,10 @@ def analyze_file(
             if row.get("blur_value") is None or row.get("blur_ok") is None:
                 continue
             pos = int(row["sample_i"])
-            frame = rgb_frames_by_pos.get(pos)
-            if frame is None:
-                continue
             evidence_row = {
                 "sample_i": pos,
                 "t_ms": float(row["t_ms"]),
                 "blur_value": float(row["blur_value"]),
-                "frame": frame,
             }
             if int(row["blur_ok"]) == 0:
                 blur_fail_evidence_rows.append(evidence_row)
@@ -859,23 +934,85 @@ def analyze_file(
 
         cv2_available = _cv2_available()
         evidence_sample_positions: set[int] = set()
-        fail_dir = None
-        pass_dir = None
+
+        blur_fail_selected: list[dict[str, Any]] = []
+        blur_pass_selected: list[dict[str, Any]] = []
         if blur_evidence_requested and cv2_available:
-            fail_sel, pass_sel = select_blur_evidence_rows(
+            blur_fail_selected, blur_pass_selected = select_blur_evidence_rows(
                 blur_fail_evidence_rows, blur_pass_evidence_rows, cfg.debug.evidence_frames_k
-            )
-            fail_dir, pass_dir = _timed_artifact_write(
-                write_blur_evidence_frames,
-                blur_fail_evidence_rows,
-                blur_pass_evidence_rows,
-                output_dir,
-                cfg.debug.evidence_frames_k,
             )
             evidence_sample_positions.update(
                 int(row.get("sample_i", -1))
-                for row in (fail_sel + pass_sel)
+                for row in (blur_fail_selected + blur_pass_selected)
                 if int(row.get("sample_i", -1)) >= 0
+            )
+
+        selected_by_reason: dict[str, list[dict[str, Any]]] = {
+            "low_clip": [],
+            "high_clip": [],
+            "flat_and_dark": [],
+            "flat_and_bright": [],
+        }
+        selection_warnings: list[str] = []
+        if exposure_evidence_requested and cv2_available:
+            exposure_k = cfg.debug.evidence_frames_k
+            if exposure_auto_trigger and not should_export_evidence:
+                exposure_k = max(cfg.thresholds.pass_exposure_evidence_k, exposure_reason_total)
+            selected_by_reason, selection_warnings = select_exposure_evidence_rows(
+                exposure_rows, exposure_k
+            )
+            for rows in selected_by_reason.values():
+                evidence_sample_positions.update(
+                    int(row.get("sample_i", -1))
+                    for row in rows
+                    if int(row.get("sample_i", -1)) >= 0
+                )
+
+        preview_positions = []
+        if cfg.debug.export_preview_frames:
+            preview_positions = _select_preview_positions(
+                decoded_rgb_positions,
+                evidence_sample_positions,
+                12,
+            )
+
+        target_rgb_positions = set(evidence_sample_positions)
+        target_rgb_positions.update(preview_positions)
+        rgb_frames_for_artifacts = _materialize_rgb_frames_for_positions(
+            source_obj,
+            selected.rgb_topic,
+            sample_pos_by_rgb_idx,
+            target_rgb_positions,
+            predecoded=rgb_frames_by_pos if use_batch_frame_cache else None,
+        )
+
+        fail_dir = None
+        pass_dir = None
+        blur_fail_rows_for_meta: list[dict[str, Any]] = []
+        blur_pass_rows_for_meta: list[dict[str, Any]] = []
+        if blur_evidence_requested and cv2_available:
+            blur_fail_rows_for_write: list[dict[str, Any]] = []
+            blur_pass_rows_for_write: list[dict[str, Any]] = []
+            for row in blur_fail_selected:
+                sample_i = int(row.get("sample_i", -1))
+                frame = rgb_frames_for_artifacts.get(sample_i)
+                if frame is None:
+                    continue
+                blur_fail_rows_for_write.append({**row, "frame": frame})
+                blur_fail_rows_for_meta.append(dict(row))
+            for row in blur_pass_selected:
+                sample_i = int(row.get("sample_i", -1))
+                frame = rgb_frames_for_artifacts.get(sample_i)
+                if frame is None:
+                    continue
+                blur_pass_rows_for_write.append({**row, "frame": frame})
+                blur_pass_rows_for_meta.append(dict(row))
+            fail_dir, pass_dir = _timed_artifact_write(
+                write_blur_evidence_frames,
+                blur_fail_rows_for_write,
+                blur_pass_rows_for_write,
+                output_dir,
+                cfg.debug.evidence_frames_k,
             )
         if blur_evidence_requested:
             report["metrics"]["blur_fail_frames_dir"] = _relative_path(fail_dir, output_dir)
@@ -886,8 +1023,8 @@ def analyze_file(
         if cfg.debug.write_annotated_evidence and cv2_available:
             annotated_fail_dir, annotated_pass_dir = _timed_artifact_write(
                 write_blur_annotated_evidence_frames,
-                blur_fail_evidence_rows,
-                blur_pass_evidence_rows,
+                blur_fail_rows_for_meta,
+                blur_pass_rows_for_meta,
                 output_dir,
                 cfg.debug.evidence_frames_k,
                 blur_threshold if blur_threshold is not None else None,
@@ -905,8 +1042,8 @@ def analyze_file(
             manifest_path = _timed_artifact_write(
                 write_evidence_manifest_json,
                 output_dir,
-                blur_fail_evidence_rows,
-                blur_pass_evidence_rows,
+                blur_fail_rows_for_meta,
+                blur_pass_rows_for_meta,
                 cfg.debug.evidence_frames_k,
                 blur_threshold if blur_threshold is not None else None,
                 cfg.sampling.rgb_stride,
@@ -920,20 +1057,10 @@ def analyze_file(
                 )
 
         if exposure_evidence_requested and cv2_available:
-            exposure_k = cfg.debug.evidence_frames_k
-            if exposure_auto_trigger and not should_export_evidence:
-                exposure_k = max(cfg.thresholds.pass_exposure_evidence_k, exposure_reason_total)
-            selected_by_reason, selection_warnings = select_exposure_evidence_rows(
-                exposure_rows, exposure_k
-            )
-            for rows in selected_by_reason.values():
-                evidence_sample_positions.update(
-                    int(row.get("sample_i", -1)) for row in rows if int(row.get("sample_i", -1)) >= 0
-                )
             exposure_dirs = _timed_artifact_write(
                 write_exposure_evidence_frames,
                 selected_by_reason,
-                rgb_frames_by_pos,
+                rgb_frames_for_artifacts,
                 output_dir,
             )
             report["metrics"]["exposure_low_clip_frames_dir"] = _relative_path(
@@ -959,13 +1086,18 @@ def analyze_file(
         phase_durations_s["pass2"] = max(0.0, pass2_total - phase_durations_s["artifacts"])
 
         preview_paths: list[str] = []
-        if cfg.debug.export_preview_frames:
+        if cfg.debug.export_preview_frames and preview_positions:
+            preview_position_set = set(preview_positions)
+            preview_frame_map = {
+                pos: frame
+                for pos, frame in rgb_frames_for_artifacts.items()
+                if pos in preview_position_set
+            }
             preview_paths = _timed_artifact_write(
                 write_rgb_previews,
-                rgb_frames_by_pos,
+                preview_frame_map,
                 output_dir,
-                12,
-                evidence_sample_positions,
+                len(preview_positions),
             )
         preview_relpaths = sorted(
             [
@@ -1059,6 +1191,201 @@ def _duration_seconds(times_ns: list[int]) -> float:
     if len(times_ns) < 2:
         return 0.0
     return (max(times_ns) - min(times_ns)) / 1_000_000_000.0
+
+
+def _summarize_rgb_metrics_from_rows(
+    exposure_rows: list[dict[str, float | int | str]],
+    thresholds: ThresholdsConfig,
+) -> dict[str, float | None | dict[str, int]]:
+    reason_counts: dict[str, int] = {
+        "low_clip": 0,
+        "high_clip": 0,
+        "flat_and_dark": 0,
+        "flat_and_bright": 0,
+    }
+    blur_values: list[float] = []
+    low_clip_values: list[float] = []
+    high_clip_values: list[float] = []
+    contrast_values: list[float] = []
+    dynamic_values: list[float] = []
+    p50_values: list[float] = []
+    dark_frame_mask: list[bool] = []
+    exposure_bad_values: list[bool] = []
+    exposure_bad_sample_indices: list[int] = []
+
+    for row in exposure_rows:
+        for reason in _parse_reason_tokens(row.get("reasons")):
+            if reason in reason_counts:
+                reason_counts[reason] += 1
+        try:
+            sample_i = int(row.get("sample_i", -1))
+            low_clip = float(row["low_clip"])
+            high_clip = float(row["high_clip"])
+            contrast = float(row["contrast"])
+            dynamic_range = float(row["dynamic_range"])
+            p50 = float(row["p50"])
+            exposure_bad = int(row.get("exposure_bad", 0)) == 1
+        except Exception:
+            continue
+        blur_value = row.get("blur_value")
+        if blur_value is not None:
+            try:
+                blur_values.append(float(blur_value))
+            except Exception:
+                pass
+        low_clip_values.append(low_clip)
+        high_clip_values.append(high_clip)
+        contrast_values.append(contrast)
+        dynamic_values.append(dynamic_range)
+        p50_values.append(p50)
+        dark_frame_mask.append(p50 < thresholds.median_dark)
+        exposure_bad_values.append(exposure_bad)
+        if exposure_bad and sample_i >= 0:
+            exposure_bad_sample_indices.append(sample_i)
+
+    if blur_values:
+        blur_arr = np.asarray(blur_values, dtype=np.float64)
+        blur_threshold = float(thresholds.blur_threshold_min)
+        blur_fail_ratio = float(np.mean(blur_arr < blur_threshold))
+        blur_median = float(np.median(blur_arr))
+        blur_p10 = float(np.percentile(blur_arr, 10))
+        blur_p50 = float(np.percentile(blur_arr, 50))
+        blur_p90 = float(np.percentile(blur_arr, 90))
+    else:
+        blur_threshold = None
+        blur_fail_ratio = None
+        blur_median = None
+        blur_p10 = None
+        blur_p50 = None
+        blur_p90 = None
+
+    return {
+        "blur_median": blur_median,
+        "blur_threshold": blur_threshold,
+        "blur_fail_ratio": blur_fail_ratio,
+        "blur_p10": blur_p10,
+        "blur_p50": blur_p50,
+        "blur_p90": blur_p90,
+        "blur_valid_frame_count": len(blur_values),
+        "exposure_bad_ratio": (float(np.mean(exposure_bad_values)) if exposure_bad_values else None),
+        "exposure_valid_frame_count": len(exposure_bad_values),
+        "exposure_bad_first_sample_i": (
+            min(exposure_bad_sample_indices) if exposure_bad_sample_indices else None
+        ),
+        "exposure_bad_last_sample_i": (
+            max(exposure_bad_sample_indices) if exposure_bad_sample_indices else None
+        ),
+        "low_clip_mean": (float(np.mean(low_clip_values)) if low_clip_values else None),
+        "low_clip_p95": (float(np.percentile(low_clip_values, 95)) if low_clip_values else None),
+        "high_clip_mean": (float(np.mean(high_clip_values)) if high_clip_values else None),
+        "high_clip_p95": (float(np.percentile(high_clip_values, 95)) if high_clip_values else None),
+        "contrast_mean": (float(np.mean(contrast_values)) if contrast_values else None),
+        "contrast_p05": (float(np.percentile(contrast_values, 5)) if contrast_values else None),
+        "dynamic_range_mean": (float(np.mean(dynamic_values)) if dynamic_values else None),
+        "dynamic_range_p05": (float(np.percentile(dynamic_values, 5)) if dynamic_values else None),
+        "p50_mean": (float(np.mean(p50_values)) if p50_values else None),
+        "p50_p05": (float(np.percentile(p50_values, 5)) if p50_values else None),
+        "p50_p95": (float(np.percentile(p50_values, 95)) if p50_values else None),
+        "dark_frame_ratio": (float(np.mean(dark_frame_mask)) if dark_frame_mask else None),
+        "low_clip_when_dark_mean": (
+            float(np.mean([v for v, is_dark in zip(low_clip_values, dark_frame_mask) if is_dark]))
+            if any(dark_frame_mask)
+            else None
+        ),
+        "exposure_bad_reason_counts": reason_counts,
+    }
+
+
+def _summarize_depth_metrics(
+    invalid_ratios: list[float],
+    thresholds: ThresholdsConfig,
+) -> dict[str, float | None]:
+    if not invalid_ratios:
+        return {
+            "depth_invalid_mean": None,
+            "depth_invalid_p95": None,
+            "depth_fail_ratio": None,
+        }
+    arr = np.asarray(invalid_ratios, dtype=np.float64)
+    fail_mask = arr > thresholds.depth_invalid_threshold
+    return {
+        "depth_invalid_mean": float(np.mean(arr)),
+        "depth_invalid_p95": float(np.percentile(arr, 95)),
+        "depth_fail_ratio": float(np.mean(fail_mask)),
+    }
+
+
+def _parse_reason_tokens(value: Any) -> list[str]:
+    if not isinstance(value, str):
+        return []
+    return [token for token in (part.strip() for part in value.split(";")) if token]
+
+
+def _materialize_rgb_frames_for_positions(
+    source_obj: MessageSource,
+    rgb_topic: str | None,
+    sample_pos_by_rgb_idx: dict[int, list[int]],
+    positions: set[int] | list[int],
+    predecoded: dict[int, Any] | None = None,
+) -> dict[int, Any]:
+    if not rgb_topic:
+        return {}
+    normalized_positions = sorted({int(pos) for pos in positions if int(pos) >= 0})
+    if not normalized_positions:
+        return {}
+
+    frames_by_pos: dict[int, Any] = {}
+    pending = set(normalized_positions)
+    if predecoded:
+        for pos in normalized_positions:
+            frame = predecoded.get(pos)
+            if frame is not None:
+                frames_by_pos[pos] = frame
+                pending.discard(pos)
+    if not pending:
+        return frames_by_pos
+
+    target_by_rgb_idx: dict[int, list[int]] = {}
+    for rgb_idx, sample_positions in sample_pos_by_rgb_idx.items():
+        selected_positions = [pos for pos in sample_positions if pos in pending]
+        if selected_positions:
+            target_by_rgb_idx[rgb_idx] = selected_positions
+    if not target_by_rgb_idx:
+        return frames_by_pos
+
+    rgb_valid_idx = -1
+    for rec in source_obj.iter_messages(topics={rgb_topic}):
+        if rec.topic != rgb_topic:
+            continue
+        t_ns, _, _ = extract_stamp_ns(rec.msg, rec.log_time_ns)
+        if t_ns <= 0:
+            continue
+        rgb_valid_idx += 1
+        sample_positions = target_by_rgb_idx.get(rgb_valid_idx)
+        if not sample_positions:
+            continue
+        frame, err = decode_rgb_message(rec.msg)
+        if err is None and frame is not None:
+            for pos in sample_positions:
+                if pos in pending:
+                    frames_by_pos[pos] = frame
+                    pending.discard(pos)
+        if not pending:
+            break
+    return frames_by_pos
+
+
+def _select_preview_positions(
+    decoded_positions: list[int],
+    evidence_positions: set[int],
+    max_previews: int,
+) -> list[int]:
+    if max_previews <= 0:
+        return []
+    ordered_positions = sorted(decoded_positions)
+    preferred = [pos for pos in ordered_positions if pos not in evidence_positions]
+    fallback = [pos for pos in ordered_positions if pos in evidence_positions]
+    return (preferred + fallback)[:max_previews]
 
 
 def _max_error_code(counts: dict[str, int], default: str) -> str:
