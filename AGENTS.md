@@ -8,7 +8,7 @@ For full commit-locked technical detail, use `docs/EGOLOGQA_MASTER_DOCUMENTATION
 Last updated: 2026-02-09  
 Repository root: `.`  
 Branch at audit: `main`  
-HEAD at audit: `279b744c8dcce6eb93405a38bd317cea96e0b2a2`
+HEAD at audit: `be1c8460a28129f54ea4fcc35fefa3fd5e204fe3`
 
 ## 1) Project Identity
 
@@ -179,9 +179,7 @@ Required state:
 
 At audited HEAD:
 - command: `.venv/bin/python -m pytest -q`
-- result: `1 failed, 140 passed` (141 total)
-- failing test:
-  - `tests/unit/test_ai_summary.py::test_streamlit_quick_summary_renders_three_ai_lines_and_debug_caption`
+- result: `142 passed` (142 total)
 
 Use this as a factual baseline, not a permanent expectation.
 

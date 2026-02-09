@@ -199,9 +199,8 @@ Not guaranteed:
 
 This repo moves. Treat this as an audited snapshot, not a permanent guarantee.
 
-At commit `279b744c8dcce6eb93405a38bd317cea96e0b2a2`:
-- `pytest -q`: `1 failed, 140 passed`
-- Failing test: `tests/unit/test_ai_summary.py::test_streamlit_quick_summary_renders_three_ai_lines_and_debug_caption`
+At commit `be1c8460a28129f54ea4fcc35fefa3fd5e204fe3`:
+- `pytest -q`: `142 passed`
 
 ## Where To Read More
 
