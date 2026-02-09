@@ -4,6 +4,7 @@ import html
 import hashlib
 import json
 import os
+import zipfile
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,6 @@ from egologqa.io.hf_fetch import list_mcap_files, resolve_cached_file
 from egologqa.kiosk_helpers import (
     allocate_run_dir,
     build_hf_display_label,
-    build_run_results_zip,
     build_timestamped_run_basename,
     ensure_writable_dir,
     human_bytes,
@@ -23,6 +23,11 @@ from egologqa.kiosk_helpers import (
     stage_uploaded_mcap,
     write_latest_run_pointer,
 )
+
+try:  # Backward-compatible with transient cloud package mismatches
+    from egologqa.kiosk_helpers import build_run_results_zip as _build_run_results_zip_helper
+except Exception:  # pragma: no cover - runtime fallback
+    _build_run_results_zip_helper = None
 from egologqa.pipeline import analyze_file
 from egologqa.ui_text import recommended_action_copy
 
@@ -218,6 +223,37 @@ def _error_box(exc: Exception, default_msg: str) -> None:
     if ADVANCED_MODE:
         with st.expander("Error details", expanded=False):
             st.code(f"{exc.__class__.__name__}: {exc}")
+
+
+def _build_run_results_zip_safe(output_dir: Path) -> Path:
+    if callable(_build_run_results_zip_helper):
+        return _build_run_results_zip_helper(output_dir)
+
+    # Fallback: keep app working if helper import is unavailable in deployed package.
+    output_dir = Path(output_dir)
+    if not output_dir.exists() or not output_dir.is_dir():
+        raise RuntimeError(f"Run directory does not exist: {output_dir}")
+
+    zip_path = output_dir / "run_results.zip"
+    files_to_include: list[Path] = []
+    for file_path in sorted(output_dir.rglob("*")):
+        if not file_path.is_file():
+            continue
+        rel = file_path.relative_to(output_dir)
+        if rel.parts and rel.parts[0] == "input":
+            continue
+        if rel.as_posix() == "run_results.zip":
+            continue
+        files_to_include.append(file_path)
+
+    try:
+        with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for file_path in files_to_include:
+                rel = file_path.relative_to(output_dir).as_posix()
+                zf.write(file_path, arcname=rel)
+    except Exception as exc:  # pragma: no cover - UI fallback
+        raise RuntimeError(f"Failed to create results archive: {exc}") from exc
+    return zip_path
 
 
 def _first_decode_error_context(errors: list[Any], codes: set[str]) -> dict[str, Any] | None:
@@ -988,7 +1024,7 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
     zip_error: str | None = None
     try:
         if not zip_path.exists():
-            zip_path = build_run_results_zip(output_dir)
+            zip_path = _build_run_results_zip_safe(output_dir)
     except Exception as exc:  # pragma: no cover - UI fallback
         zip_error = str(exc)
 
