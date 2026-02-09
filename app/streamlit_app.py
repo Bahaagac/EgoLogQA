@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import hashlib
 import json
 import os
@@ -55,8 +56,21 @@ LOCAL_MAX_FILES = _env_int("EGOLOGQA_LOCAL_MAX_FILES", 500)
 
 st.set_page_config(page_title="EgoLogQA", layout="wide")
 st.title("EgoLogQA")
-st.caption("MicroAGI00 ROS2 MCAP quality gate")
+st.caption("MicroAGI00 ROS2 MCAP quality assessment")
 st.write("Choose an MCAP file to analyze.")
+st.markdown(
+    """
+<style>
+.egologqa-help {
+    margin-top: -0.55rem;
+    margin-bottom: 0.4rem;
+    font-size: 0.88rem;
+    opacity: 0.88;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
 
 
 def _read_hf_token() -> str | None:
@@ -126,12 +140,15 @@ def _phase_label(phase: str) -> str:
 def _render_gate_summary(report: dict[str, Any]) -> None:
     gate = report.get("gate", {})
     gate_name = gate.get("gate")
+    display_gate = {"PASS": "PASS", "WARN": "WARNING", "FAIL": "FAIL"}.get(
+        str(gate_name), str(gate_name)
+    )
     if gate_name == "PASS":
-        st.success(f"Gate: {gate_name}")
+        st.success(f"Overall Result: {display_gate}")
     elif gate_name == "WARN":
-        st.warning(f"Gate: {gate_name}")
+        st.warning(f"Overall Result: {display_gate}")
     else:
-        st.error(f"Gate: {gate_name}")
+        st.error(f"Overall Result: {display_gate}")
     st.write(f"Recommended action: `{gate.get('recommended_action')}`")
     if gate_name == "PASS":
         return
@@ -139,9 +156,9 @@ def _render_gate_summary(report: dict[str, Any]) -> None:
     fail_reasons = gate.get("fail_reasons", [])
     warn_reasons = gate.get("warn_reasons", [])
     if gate_name == "FAIL" and fail_reasons:
-        _render_reason_table("Fail Reasons", "FAIL", fail_reasons, report)
+        _render_reason_table("Failure Reasons", "FAIL", fail_reasons, report)
     if gate_name in {"WARN", "FAIL"} and warn_reasons:
-        _render_reason_table("Warn Reasons", "WARN", warn_reasons, report)
+        _render_reason_table("Warning Reasons", "WARNING", warn_reasons, report)
 
 
 def _on_progress_scaled(start: float, end: float):
@@ -246,7 +263,11 @@ def _render_header(
         st.header(title, anchor=False)
     else:
         st.subheader(title, anchor=False)
-    st.caption(f"ℹ {explanation}")
+    escaped_explanation = html.escape(explanation, quote=True)
+    st.markdown(
+        f'<p class="egologqa-help">ℹ {escaped_explanation}</p>',
+        unsafe_allow_html=True,
+    )
 
 
 def _load_segments_from_metric(metrics: dict[str, Any], output_dir: Path, key: str) -> list[dict[str, Any]]:
@@ -404,7 +425,7 @@ def _render_reason_table(
                 "severity": severity,
                 "reason_code": code,
                 "meaning": REASON_DESCRIPTIONS.get(code, "No description available for this code yet."),
-                "observed_context": _format_reason_context(code, report),
+                "What We Observed": _format_reason_context(code, report),
             }
         )
     st.dataframe(rows, use_container_width=True, hide_index=True)
@@ -481,7 +502,7 @@ def _render_artifacts(metrics: dict[str, Any], output_dir: Path) -> None:
     if preview_images:
         _render_header(
             "Preview Frames",
-            "These are context samples. Evidence sections below focus on issue examples and avoid overlap when possible.",
+            "These are context samples. Evidence sections below focus on issue examples.",
             level=3,
         )
         _show_image_set(preview_images, max_images=12)
@@ -516,16 +537,36 @@ def _render_artifacts(metrics: dict[str, Any], output_dir: Path) -> None:
         st.info("No blur example frames were exported for this run.")
 
     exposure_views = [
-        ("low_clip", "Exposure evidence: low clip", "exposure_low_clip_frames_dir"),
-        ("high_clip", "Exposure evidence: high clip", "exposure_high_clip_frames_dir"),
-        ("flat_and_dark", "Exposure evidence: flat and dark", "exposure_flat_and_dark_frames_dir"),
-        ("flat_and_bright", "Exposure evidence: flat and bright", "exposure_flat_and_bright_frames_dir"),
+        (
+            "low_clip",
+            "Exposure evidence: low clip",
+            "exposure_low_clip_frames_dir",
+            "These frames are very dark in shadow regions and lose detail there.",
+        ),
+        (
+            "high_clip",
+            "Exposure evidence: high clip",
+            "exposure_high_clip_frames_dir",
+            "These frames are very bright in highlight regions and lose detail there.",
+        ),
+        (
+            "flat_and_dark",
+            "Exposure evidence: flat and dark",
+            "exposure_flat_and_dark_frames_dir",
+            "These frames are dark and low-contrast, so scene details are hard to see.",
+        ),
+        (
+            "flat_and_bright",
+            "Exposure evidence: flat and bright",
+            "exposure_flat_and_bright_frames_dir",
+            "These frames are bright and low-contrast, so scene details are washed out.",
+        ),
     ]
     counts = metrics.get("exposure_bad_reason_counts", {})
-    for reason, title, key in exposure_views:
+    for reason, title, key, help_text in exposure_views:
         _render_header(
             title,
-            "These are example frames for this exposure issue type.",
+            help_text,
             level=3,
         )
         reason_count = int(counts.get(reason, 0)) if isinstance(counts, dict) else 0
@@ -543,9 +584,14 @@ def _render_artifacts(metrics: dict[str, Any], output_dir: Path) -> None:
                     _show_image_set(images, max_images=None)
                     continue
         if reason_count == 0:
-            st.caption("No example frames for this issue in this run.")
+            st.info("No example frames for this issue in this run.")
         else:
-            st.caption("This issue appears in this run, but there are no example images here.")
+            if int(metrics.get("rgb_decode_success_count") or 0) <= 0:
+                st.info("This issue appears in this run, but RGB frames were not available for example export.")
+            else:
+                st.info("This issue appears in this run, but example images could not be exported.")
+
+    st.markdown('<div style="height: 0.85rem;"></div>', unsafe_allow_html=True)
 
     exposure_error_rel = metrics.get("exposure_evidence_error_path")
     if exposure_error_rel:
@@ -667,7 +713,7 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
 
     _render_header(
         "Integrity Segments",
-        "Time ranges that pass timing and sensor-integrity checks.",
+        "These are continuous time ranges where timestamps and core sensor timing stay healthy.",
         level=3,
     )
     integrity_segments = report.get("segments", [])
@@ -680,7 +726,7 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
 
     _render_header(
         "Clean Segments",
-        "Time ranges that also pass quality checks (for segment-only usage).",
+        "These are stricter segments that pass timing checks plus blur, exposure, and depth quality checks.",
         level=3,
     )
     clean_segments = _load_segments_from_metric(metrics, output_dir, "clean_segments_path")
@@ -696,10 +742,11 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
     else:
         st.info("No errors recorded.")
 
+    _render_artifacts(metrics, output_dir)
+
+    st.markdown('<div style="height: 0.8rem;"></div>', unsafe_allow_html=True)
     st.caption(f"Run directory: `{output_dir.resolve()}`")
     st.caption(f"Report path: `{(output_dir / 'report.json').resolve()}`")
-
-    _render_artifacts(metrics, output_dir)
 
     with st.expander("Raw report.json", expanded=False):
         st.json(report)
