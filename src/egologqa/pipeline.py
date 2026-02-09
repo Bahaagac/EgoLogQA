@@ -813,12 +813,8 @@ def analyze_file(
         exposure_reason_total = 0
         if isinstance(exposure_reason_counts, dict):
             exposure_reason_total = int(sum(int(v) for v in exposure_reason_counts.values()))
-        pass_exposure_trigger = (
-            gate["gate"] == "PASS"
-            and exposure_reason_total > 0
-            and rgb_decode_success_count > 0
-        )
-        exposure_evidence_requested = should_export_evidence or pass_exposure_trigger
+        exposure_auto_trigger = exposure_reason_total > 0 and rgb_decode_success_count > 0
+        exposure_evidence_requested = should_export_evidence or exposure_auto_trigger
 
         cv2_available = _cv2_available()
         evidence_sample_positions: set[int] = set()
@@ -884,7 +880,7 @@ def analyze_file(
 
         if exposure_evidence_requested and cv2_available:
             exposure_k = cfg.debug.evidence_frames_k
-            if pass_exposure_trigger and not should_export_evidence:
+            if exposure_auto_trigger and not should_export_evidence:
                 exposure_k = max(cfg.thresholds.pass_exposure_evidence_k, exposure_reason_total)
             selected_by_reason, selection_warnings = select_exposure_evidence_rows(
                 exposure_rows, exposure_k

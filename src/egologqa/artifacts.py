@@ -86,28 +86,74 @@ def write_sync_histogram(sync_deltas_ms: list[float] | None, output_dir: str | P
 
     bins = 20
     hist, bin_edges = np.histogram(deltas, bins=bins)
-    width, height = 900, 360
-    margin = 40
+    width, height = 920, 420
+    left_margin = 72
+    right_margin = 36
+    top_margin = 44
+    bottom_margin = 86
     canvas = np.full((height, width, 3), 245, dtype=np.uint8)
     max_count = max(1, int(hist.max()))
-    plot_w = width - 2 * margin
-    plot_h = height - 2 * margin
-    bin_w = max(1, plot_w // bins)
+    plot_left = left_margin
+    plot_right = width - right_margin
+    plot_top = top_margin
+    plot_bottom = height - bottom_margin
+    plot_w = plot_right - plot_left
+    plot_h = plot_bottom - plot_top
 
     for i, count in enumerate(hist):
-        x0 = margin + i * bin_w
-        x1 = x0 + bin_w - 2
+        x0 = plot_left + int(i * plot_w / bins)
+        x1 = plot_left + int((i + 1) * plot_w / bins) - 2
         h = int((count / max_count) * plot_h)
-        y0 = height - margin
-        y1 = y0 - h
-        cv2.rectangle(canvas, (x0, y0), (x1, y1), (70, 120, 220), thickness=-1)
+        y1 = plot_bottom - h
+        cv2.rectangle(canvas, (x0, y1), (max(x0 + 1, x1), plot_bottom), (70, 120, 220), thickness=-1)
 
-    cv2.line(canvas, (margin, height - margin), (width - margin, height - margin), (20, 20, 20), 1)
-    cv2.line(canvas, (margin, height - margin), (margin, margin), (20, 20, 20), 1)
+    for tick_i in range(5):
+        y_val = int(round((max_count * tick_i) / 4))
+        y = plot_bottom - int((y_val / max_count) * plot_h)
+        cv2.line(canvas, (plot_left, y), (plot_right, y), (225, 225, 225), 1)
+        cv2.line(canvas, (plot_left - 4, y), (plot_left, y), (20, 20, 20), 1)
+        cv2.putText(
+            canvas,
+            str(y_val),
+            (12, y + 4),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (20, 20, 20),
+            1,
+            cv2.LINE_AA,
+        )
+
+    x_min = float(bin_edges[0])
+    x_max = float(bin_edges[-1])
+    for tick_i in range(5):
+        frac = tick_i / 4.0
+        x = plot_left + int(frac * plot_w)
+        x_val = x_min + frac * (x_max - x_min)
+        cv2.line(canvas, (x, plot_bottom), (x, plot_bottom + 4), (20, 20, 20), 1)
+        label = f"{x_val:.1f}"
+        if tick_i == 0:
+            lx = x
+        elif tick_i == 4:
+            lx = x - 40
+        else:
+            lx = x - 18
+        cv2.putText(
+            canvas,
+            label,
+            (lx, plot_bottom + 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (20, 20, 20),
+            1,
+            cv2.LINE_AA,
+        )
+
+    cv2.line(canvas, (plot_left, plot_bottom), (plot_right, plot_bottom), (20, 20, 20), 1)
+    cv2.line(canvas, (plot_left, plot_bottom), (plot_left, plot_top), (20, 20, 20), 1)
     cv2.putText(
         canvas,
         "Sync delta histogram (ms)",
-        (margin, 22),
+        (plot_left, 24),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.6,
         (20, 20, 20),
@@ -116,8 +162,28 @@ def write_sync_histogram(sync_deltas_ms: list[float] | None, output_dir: str | P
     )
     cv2.putText(
         canvas,
+        "count",
+        (10, plot_top - 8),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (20, 20, 20),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        canvas,
+        "delta (ms)",
+        (plot_left + (plot_w // 2) - 35, height - 28),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (20, 20, 20),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        canvas,
         f"max={float(deltas.max()):.2f}  p95={float(np.percentile(deltas, 95)):.2f}",
-        (margin, height - 10),
+        (plot_left, height - 8),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.5,
         (20, 20, 20),
@@ -144,28 +210,62 @@ def write_drop_timeline(
     except Exception:
         return None
 
-    width, height = 900, 220
-    margin = 40
+    width, height = 920, 300
+    left_margin = 72
+    right_margin = 36
+    top_margin = 46
+    bottom_margin = 92
     canvas = np.full((height, width, 3), 245, dtype=np.uint8)
     t0 = float(min(rgb_times_ms))
     t1 = float(max(rgb_times_ms))
     if t1 <= t0:
         return None
+    duration_s = (t1 - t0) / 1000.0
+    plot_left = left_margin
+    plot_right = width - right_margin
+    plot_top = top_margin
+    plot_bottom = height - bottom_margin
 
     def tx(t: float) -> int:
-        return int(margin + (t - t0) * (width - 2 * margin) / (t1 - t0))
+        return int(plot_left + (t - t0) * (plot_right - plot_left) / (t1 - t0))
 
-    y = height // 2
-    cv2.line(canvas, (margin, y), (width - margin, y), (20, 20, 20), 1)
+    y = (plot_top + plot_bottom) // 2
+    cv2.line(canvas, (plot_left, y), (plot_right, y), (20, 20, 20), 1)
     for left, right in gap_intervals_ms:
         x0 = tx(left)
         x1 = tx(right)
-        cv2.rectangle(canvas, (x0, y - 20), (max(x0 + 1, x1), y + 20), (80, 80, 220), -1)
+        cv2.rectangle(canvas, (x0, y - 30), (max(x0 + 1, x1), y + 30), (80, 80, 220), -1)
+
+    for tick_i in range(5):
+        frac = tick_i / 4.0
+        x = plot_left + int(frac * (plot_right - plot_left))
+        cv2.line(canvas, (x, plot_top), (x, plot_bottom), (225, 225, 225), 1)
+        cv2.line(canvas, (x, plot_bottom), (x, plot_bottom + 4), (20, 20, 20), 1)
+        tick_s = duration_s * frac
+        label = f"{tick_s:.1f}s"
+        if tick_i == 0:
+            lx = x
+        elif tick_i == 4:
+            lx = x - 44
+        else:
+            lx = x - 18
+        cv2.putText(
+            canvas,
+            label,
+            (lx, plot_bottom + 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (20, 20, 20),
+            1,
+            cv2.LINE_AA,
+        )
+
+    cv2.line(canvas, (plot_left, plot_bottom), (plot_right, plot_bottom), (20, 20, 20), 1)
 
     cv2.putText(
         canvas,
         "Drop/Gap timeline",
-        (margin, 20),
+        (plot_left, 24),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.6,
         (20, 20, 20),
@@ -174,8 +274,38 @@ def write_drop_timeline(
     )
     cv2.putText(
         canvas,
+        "time (s)",
+        (plot_left + ((plot_right - plot_left) // 2) - 24, height - 28),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (20, 20, 20),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        canvas,
+        "gap blocks",
+        (10, plot_top - 8),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (20, 20, 20),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        canvas,
+        f"start_s=0.00 end_s={duration_s:.2f} duration_s={duration_s:.2f}",
+        (plot_left, height - 34),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.48,
+        (20, 20, 20),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        canvas,
         f"gaps={len(gap_intervals_ms)}",
-        (margin, height - 10),
+        (plot_left, height - 10),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.5,
         (20, 20, 20),
