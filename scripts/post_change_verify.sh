@@ -3,10 +3,13 @@ set -euo pipefail
 
 REPO="${REPO:-$(pwd)}"
 PY="$REPO/.venv/bin/python"
-CLI="$REPO/.venv/bin/egologqa"
+CLI="${CLI:-$REPO/.venv/bin/EgoLogQA}"
+if [ ! -x "$CLI" ] && [ -x "$REPO/.venv/bin/egologqa" ]; then
+    CLI="$REPO/.venv/bin/egologqa"
+fi
 BASECFG="$REPO/configs/microagi00_ros2.yaml"
 OUTROOT="$REPO/out/testmatrix"
-MCAP="${MCAP:-$HOME/.cache/egologqa/hf_mcaps/raw_mcaps/Bakery_Food_Preparation_15f719ff.mcap}"
+MCAP="${MCAP:-$HOME/.cache/EgoLogQA/hf_mcaps/raw_mcaps/Bakery_Food_Preparation_15f719ff.mcap}"
 RUN_VALIDATION="${RUN_VALIDATION:-0}"
 RUN_STREAMLIT="${RUN_STREAMLIT:-1}"
 STREAMLIT_PORT="${STREAMLIT_PORT:-8766}"
@@ -110,7 +113,7 @@ enforce_cli_python_preflight() {
 
     print_preflight_failures
     if [ "$ALLOW_PYTHONPATH_HACK" != "1" ]; then
-        fail "egologqa CLI/import preflight failed. Fix install (for example: pip install -e .) instead of relying on PYTHONPATH hacks."
+        fail "EgoLogQA CLI/import preflight failed. Fix install (for example: pip install -e .) instead of relying on PYTHONPATH hacks."
         return 1
     fi
 
@@ -129,7 +132,7 @@ enforce_cli_python_preflight() {
 
     print_preflight_failures
     restore_pythonpath "$orig_pythonpath"
-    fail "egologqa CLI/import preflight still failing after hack retry."
+    fail "EgoLogQA CLI/import preflight still failing after hack retry."
     return 1
 }
 
@@ -454,7 +457,7 @@ edge_sweep() {
     local list_path="$OUTROOT/edge_candidates.txt"
     {
         [ -d "$HOME/Downloads" ] && find "$HOME/Downloads" -maxdepth 1 -type f -name '*.mcap' 2>/dev/null || true
-        [ -d "$HOME/.cache/egologqa/hf_mcaps/raw_mcaps" ] && find "$HOME/.cache/egologqa/hf_mcaps/raw_mcaps" -maxdepth 1 -type f -name '*.mcap' 2>/dev/null || true
+        [ -d "$HOME/.cache/EgoLogQA/hf_mcaps/raw_mcaps" ] && find "$HOME/.cache/EgoLogQA/hf_mcaps/raw_mcaps" -maxdepth 1 -type f -name '*.mcap' 2>/dev/null || true
         [ -f "$MCAP" ] && printf '%s\n' "$MCAP" || true
     } | LC_ALL=C sort | awk '!seen[$0]++' | head -n 8 > "$list_path"
 
@@ -539,10 +542,10 @@ fi
 rm -rf "$OUTROOT"
 mkdir -p "$OUTROOT"
 
-CFG_DEFAULT="/tmp/egologqa_default.yaml"
-CFG_MANIFEST="/tmp/egologqa_manifest.yaml"
-CFG_ANNOT="/tmp/egologqa_annot.yaml"
-CFG_FORCED_FAIL="/tmp/egologqa_forced_fail.yaml"
+CFG_DEFAULT="/tmp/EgoLogQA_default.yaml"
+CFG_MANIFEST="/tmp/EgoLogQA_manifest.yaml"
+CFG_ANNOT="/tmp/EgoLogQA_annot.yaml"
+CFG_FORCED_FAIL="/tmp/EgoLogQA_forced_fail.yaml"
 
 make_cfg "$CFG_DEFAULT" 0 0 >/dev/null
 make_cfg "$CFG_MANIFEST" 1 0 >/dev/null
@@ -561,8 +564,8 @@ C_DIR="$(run_case C_annot "$CFG_ANNOT")"
 C_RPT="$(get_report "$C_DIR")"
 assert_file_exists "$C_RPT" "C report exists"
 
-mkdir -p /tmp/egologqa_no_cv2
-cat > /tmp/egologqa_no_cv2/cv2.py <<'PY'
+mkdir -p /tmp/EgoLogQA_no_cv2
+cat > /tmp/EgoLogQA_no_cv2/cv2.py <<'PY'
 raise ImportError("simulated cv2 missing")
 PY
 
@@ -570,7 +573,7 @@ D_DIR="$OUTROOT/D_cv2_missing"
 rm -rf "$D_DIR"
 mkdir -p "$D_DIR"
 set +e
-PYTHONPATH="/tmp/egologqa_no_cv2${PYTHONPATH:+:$PYTHONPATH}" "$CLI" analyze \
+PYTHONPATH="/tmp/EgoLogQA_no_cv2${PYTHONPATH:+:$PYTHONPATH}" "$CLI" analyze \
     --input "$MCAP" --output "$D_DIR" --config "$CFG_MANIFEST" > "$D_DIR/analyze.log" 2>&1
 D_EC=$?
 set -e

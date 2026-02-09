@@ -29,7 +29,7 @@ from egologqa.ui_text import recommended_action_copy
 HF_REPO_ID = os.getenv("EGOLOGQA_HF_REPO_ID", "MicroAGI-Labs/MicroAGI00")
 HF_REVISION = os.getenv("EGOLOGQA_HF_REVISION", "main")
 HF_PREFIX = os.getenv("EGOLOGQA_HF_PREFIX", "raw_mcaps/")
-HF_CACHE_DIR = Path(os.getenv("EGOLOGQA_HF_CACHE_DIR", "~/.cache/egologqa/hf_mcaps")).expanduser()
+HF_CACHE_DIR = Path(os.getenv("EGOLOGQA_HF_CACHE_DIR", "~/.cache/EgoLogQA/hf_mcaps")).expanduser()
 RUNS_BASE_DIR = resolve_runs_base_dir(os.getenv("EGOLOGQA_RUNS_DIR"))
 CONFIG_PATH = "configs/microagi00_ros2.yaml"
 ADVANCED_MODE = os.getenv("EGOLOGQA_UI_ADVANCED", "0") == "1"

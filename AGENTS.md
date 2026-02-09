@@ -40,7 +40,7 @@ Top-level:
 - `scripts/verify_4_mcap.sh`
 - `src/egologqa/...`
 - `tests/...`
-- runtime artifact areas (`report_out/`, `out/`, `~/.cache/egologqa/runs`)
+- runtime artifact areas (`report_out/`, `out/`, `~/.cache/EgoLogQA/runs`)
 
 Source package highlights:
 - `src/egologqa/pipeline.py`
@@ -65,11 +65,11 @@ Tests:
 ## 3) Runtime environments and command gotchas
 
 Observed environment snapshots can vary by machine. Practical rule is stable:
-- Use `.venv/bin/python` and `.venv/bin/egologqa` for deterministic behavior.
+- Use `.venv/bin/python` and `.venv/bin/EgoLogQA` for deterministic behavior.
 - Do not rely on `python`/`pip` aliases being present.
 
 Canonical commands:
-- Analyze: `.venv/bin/python -m egologqa analyze ...`
+- Analyze: `.venv/bin/EgoLogQA analyze ...`
 - Tests: `.venv/bin/python -m pytest -q`
 - UI: `.venv/bin/streamlit run app/streamlit_app.py`
 
@@ -91,11 +91,11 @@ Lock file:
 ## 5) CLI contract
 
 Entrypoints:
-- Script: `egologqa` -> `egologqa.cli:main`
+- Script: `EgoLogQA` -> `egologqa.cli:main`
 - Module: `python -m egologqa`
 
 Command shape:
-- `egologqa analyze --input <mcap> --output <output_dir> --config <yaml>`
+- `EgoLogQA analyze --input <mcap> --output <output_dir> --config <yaml>`
 - Optional topic overrides:
   - `--rgb-topic`
   - `--depth-topic`
@@ -139,7 +139,7 @@ Results rendering:
 - Raw report expander
 
 Run storage defaults:
-- `~/.cache/egologqa/runs`
+- `~/.cache/EgoLogQA/runs`
 - `latest_run.txt` pointer maintained
 - Local uploads are staged under each run directory (`<run>/input/uploaded_*.mcap`)
 
@@ -475,7 +475,7 @@ Install:
 
 Analyze:
 ```bash
-.venv/bin/python -m egologqa analyze \
+.venv/bin/EgoLogQA analyze \
   --input /absolute/path/to/file.mcap \
   --config configs/microagi00_ros2.yaml \
   --output report_out
@@ -557,7 +557,7 @@ If adding diagnostics:
 
 ## 23) Open follow-up items
 
-1. Evaluate retention/cleanup policy for `~/.cache/egologqa/runs`.
+1. Evaluate retention/cleanup policy for `~/.cache/EgoLogQA/runs`.
 2. Keep `uv.lock` policy aligned with reproducibility goals.
 3. If operator-only controls grow, consider dedicated admin UI surface.
 4. Continue validating threshold portability across camera resolutions.

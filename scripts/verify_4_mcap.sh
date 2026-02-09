@@ -3,12 +3,15 @@ set -euo pipefail
 
 REPO="${REPO:-$(pwd)}"
 PY="$REPO/.venv/bin/python"
-CLI="$REPO/.venv/bin/egologqa"
+CLI="${CLI:-$REPO/.venv/bin/EgoLogQA}"
+if [ ! -x "$CLI" ] && [ -x "$REPO/.venv/bin/egologqa" ]; then
+    CLI="$REPO/.venv/bin/egologqa"
+fi
 BASECFG="$REPO/configs/microagi00_ros2.yaml"
 OUTROOT="$REPO/out/verify4"
 
-M1="${M1:-$HOME/.cache/egologqa/hf_mcaps/raw_mcaps/Bakery_Food_Preparation_15f719ff.mcap}"
-M2="${M2:-$HOME/.cache/egologqa/hf_mcaps/raw_mcaps/Bedroom_Bed_Making_55e608cd.mcap}"
+M1="${M1:-$HOME/.cache/EgoLogQA/hf_mcaps/raw_mcaps/Bakery_Food_Preparation_15f719ff.mcap}"
+M2="${M2:-$HOME/.cache/EgoLogQA/hf_mcaps/raw_mcaps/Bedroom_Bed_Making_55e608cd.mcap}"
 M3="${M3:-$HOME/Downloads/Desktop_Hardware_Assembly_9c098411.mcap}"
 M4="${M4:-$HOME/Downloads/Folding_Clothing_Items_30a47f4f.mcap}"
 MCAPS=("$M1" "$M2" "$M3" "$M4")
@@ -84,7 +87,7 @@ enforce_cli_python_preflight() {
 
     print_preflight_failures
     if [ "$ALLOW_PYTHONPATH_HACK" != "1" ]; then
-        fail "egologqa CLI/import preflight failed. Fix install (for example: pip install -e .) instead of relying on PYTHONPATH hacks."
+        fail "EgoLogQA CLI/import preflight failed. Fix install (for example: pip install -e .) instead of relying on PYTHONPATH hacks."
     fi
 
     [ -d "$REPO/src" ] || fail "ALLOW_PYTHONPATH_HACK=1 but $REPO/src not found"
@@ -99,7 +102,7 @@ enforce_cli_python_preflight() {
 
     print_preflight_failures
     restore_pythonpath "$orig_pythonpath"
-    fail "egologqa CLI/import preflight still failing after hack retry."
+    fail "EgoLogQA CLI/import preflight still failing after hack retry."
 }
 
 is_gt() {
