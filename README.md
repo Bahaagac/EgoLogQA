@@ -24,21 +24,15 @@ This project is designed so non-critical decoder issues degrade gracefully inste
 
 ## What You Get From One Run
 
-Technical gate token in `report.json`:
-- `PASS`
-- `WARN`
-- `FAIL`
+- Result:
+  - Pass
+  - Warning
+  - Fail
 
-Human-facing wording in UI/docs:
-- Pass
-- Warning
-- Fail
-
-Recommended action token:
-- `USE_FULL_SEQUENCE`
-- `USE_SEGMENTS_ONLY`
-- `FIX_TIME_ALIGNMENT`
-- `RECAPTURE_OR_SKIP`
+- Quick run summary (UI):
+  - AI-generated summary  (Gemini API)
+  - Predefined deterministic fallback summary when AI is unavailable
+  - Includes short `summary`, `explanation`, and `insight` lines plus an action line from the recommended-action token
 
 Primary outputs:
 - `report.json` (always written)
