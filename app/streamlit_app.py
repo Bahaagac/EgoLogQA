@@ -11,21 +11,15 @@ import streamlit as st
 
 from egologqa.config import load_config
 from egologqa.io.hf_fetch import list_mcap_files, resolve_cached_file
-from egologqa.io.local_fs import (
-    LocalDirNotFound,
-    LocalDirNotReadable,
-    TooManyFiles,
-    is_readable_file,
-    list_mcap_files_in_dir,
-)
 from egologqa.kiosk_helpers import (
     allocate_run_dir,
     build_hf_display_label,
     build_timestamped_run_basename,
     ensure_writable_dir,
-    make_local_option_label,
+    human_bytes,
     map_error_bucket,
     resolve_runs_base_dir,
+    stage_uploaded_mcap,
     write_latest_run_pointer,
 )
 from egologqa.pipeline import analyze_file
@@ -39,20 +33,6 @@ HF_CACHE_DIR = Path(os.getenv("EGOLOGQA_HF_CACHE_DIR", "~/.cache/egologqa/hf_mca
 RUNS_BASE_DIR = resolve_runs_base_dir(os.getenv("EGOLOGQA_RUNS_DIR"))
 CONFIG_PATH = "configs/microagi00_ros2.yaml"
 ADVANCED_MODE = os.getenv("EGOLOGQA_UI_ADVANCED", "0") == "1"
-
-
-def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        return default
-    return value if value > 0 else default
-
-
-LOCAL_MAX_FILES = _env_int("EGOLOGQA_LOCAL_MAX_FILES", 500)
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -238,12 +218,6 @@ def _cached_hf_file_list(
         token=_token,
         prefix=prefix,
     )
-
-
-@st.cache_data(show_spinner=False, ttl=300)
-def _cached_local_file_list(dir_path: str, nonce: int, max_files: int) -> list[dict[str, Any]]:
-    del nonce
-    return list_mcap_files_in_dir(dir_path=dir_path, max_files=max_files)
 
 
 def _error_box(exc: Exception, default_msg: str) -> None:
@@ -530,39 +504,21 @@ def _normalize_segment_rows(segments: list[dict[str, Any]]) -> list[dict[str, An
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# Folder presets / input resolution (unchanged logic)
+# Input resolution
 # ───────────────────────────────────────────────────────────────────────────
-def _local_folder_presets(last_used: str | None) -> list[tuple[str, str]]:
-    home = Path.home()
-    presets: list[tuple[str, str]] = [
-        ("~/Downloads", str(home / "Downloads")),
-        ("~/Desktop", str(home / "Desktop")),
-        ("~/.cache/egologqa", str(home / ".cache" / "egologqa")),
-    ]
-    if last_used and all(last_used != value for _, value in presets):
-        presets.append(("Last used", last_used))
-    presets.append(("Other...", "__other__"))
-    return presets
-
-
-def _normalized_local_dir_key(dir_path: str) -> str:
-    expanded = os.path.expandvars(dir_path)
-    return str(Path(expanded).expanduser().resolve())
-
-
 def _resolve_input_to_local_path(
     source_mode: str,
-    selected_local_path: str | None,
     selected_hf_path: str | None,
     hf_token: str | None,
+    uploaded_local_file: Any | None,
+    output_dir: Path,
 ) -> tuple[Path, float]:
     if source_mode == "Local disk":
-        if selected_local_path is None:
-            raise RuntimeError("No local file selected.")
-        ok, reason = is_readable_file(selected_local_path)
-        if not ok:
-            raise RuntimeError(reason or "Selected local file is not readable.")
-        return Path(selected_local_path), 0.05
+        if uploaded_local_file is None:
+            raise RuntimeError("No uploaded file selected.")
+        _update_status("upload: staging file")
+        staged_path = stage_uploaded_mcap(uploaded_local_file=uploaded_local_file, output_dir=output_dir)
+        return staged_path, 0.08
 
     if selected_hf_path is None:
         raise RuntimeError("No Hugging Face file selected.")
@@ -1014,11 +970,6 @@ st.session_state.setdefault("mcap_list", [])
 st.session_state.setdefault("mcap_list_key", None)
 st.session_state.setdefault("mcap_list_loaded", False)
 st.session_state.setdefault("selected_hf_file", None)
-st.session_state.setdefault("local_refresh_nonce", 0)
-st.session_state.setdefault("local_dir", str(Path.home() / "Downloads"))
-st.session_state.setdefault("local_dir_choice", "~/Downloads")
-st.session_state.setdefault("local_custom_dir", "")
-st.session_state.setdefault("selected_local_file", None)
 st.session_state.setdefault("latest_report", None)
 st.session_state.setdefault("latest_output_dir", None)
 
@@ -1074,14 +1025,18 @@ def _finish_status_fail(label: str = "Failed") -> None:
 
 
 # ───────────────────────────────────────────────────────────────────────────
-# Run analysis (unchanged logic)
+# Run analysis
 # ───────────────────────────────────────────────────────────────────────────
-def _run_analysis(source_mode: str, selected_hf_path: str | None, selected_local_path: str | None) -> None:
+def _run_analysis(
+    source_mode: str,
+    selected_hf_path: str | None,
+    uploaded_local_file: Any | None,
+) -> None:
     try:
         ensure_writable_dir(RUNS_BASE_DIR, "Runs directory")
         cfg = load_config(CONFIG_PATH)
 
-        chosen = selected_hf_path if source_mode == "Hugging Face" else selected_local_path
+        chosen = selected_hf_path if source_mode == "Hugging Face" else getattr(uploaded_local_file, "name", None)
         if chosen is None:
             raise RuntimeError("No file selected.")
 
@@ -1092,14 +1047,15 @@ def _run_analysis(source_mode: str, selected_hf_path: str | None, selected_local
         if source_mode == "Hugging Face":
             _start_status("cache: resolving dataset file")
         else:
-            _start_status("local: validating file")
+            _start_status("upload: staging file")
             progress.progress(0.05)
 
         source_path, analysis_start = _resolve_input_to_local_path(
             source_mode=source_mode,
-            selected_local_path=selected_local_path,
             selected_hf_path=selected_hf_path,
             hf_token=hf_token,
+            uploaded_local_file=uploaded_local_file,
+            output_dir=output_dir,
         )
 
         result = analyze_file(
@@ -1176,11 +1132,6 @@ for row in hf_files:
     path = row["path"]
     hf_labels[path] = build_hf_display_label(path, HF_PREFIX, row.get("size_bytes"))
 
-local_presets = _local_folder_presets(st.session_state.get("local_dir"))
-local_choice_labels = [label for label, _ in local_presets]
-if st.session_state["local_dir_choice"] not in local_choice_labels:
-    st.session_state["local_dir_choice"] = local_choice_labels[0]
-
 # ───────────────────────────────────────────────────────────────────────────
 # Source tabs
 # ───────────────────────────────────────────────────────────────────────────
@@ -1188,7 +1139,7 @@ hf_tab, local_tab = st.tabs(["Hugging Face", "Local disk"])
 
 with hf_tab:
     if not hf_available:
-        st.warning("`huggingface_hub` is not installed. Local disk mode is still available.")
+        st.warning("`huggingface_hub` is not installed. Upload mode is still available.")
     selected_hf_path = st.selectbox(
         "MCAP file", options=hf_options, key="selected_hf_file",
         format_func=lambda value: hf_labels.get(value, str(value)),
@@ -1200,70 +1151,24 @@ with hf_tab:
         st.caption("Choose a Hugging Face file to enable analysis.")
 
     if st.button("Analyze Hugging Face file", type="primary", key="analyze_hf", disabled=selected_hf_path is None):
-        _run_analysis("Hugging Face", selected_hf_path=selected_hf_path, selected_local_path=None)
+        _run_analysis("Hugging Face", selected_hf_path=selected_hf_path, uploaded_local_file=None)
 
 with local_tab:
-    folder_label = st.selectbox("Folder", options=local_choice_labels, key="local_dir_choice")
-    selected_folder_value = dict(local_presets).get(folder_label, "")
-    if selected_folder_value == "__other__":
-        custom_value = st.text_input("Custom folder path", key="local_custom_dir")
-        resolved_local_dir = custom_value.strip()
-    else:
-        resolved_local_dir = selected_folder_value
-
-    previous_local_dir = st.session_state.get("local_dir")
-    if resolved_local_dir and resolved_local_dir != previous_local_dir:
-        st.session_state["local_dir"] = resolved_local_dir
-        st.session_state["selected_local_file"] = None
-
-    if st.button("Refresh local list", key="local_refresh"):
-        st.session_state["local_refresh_nonce"] += 1
-
-    local_rows: list[dict[str, Any]] = []
-    local_error: str | None = None
-    effective_local_dir = st.session_state.get("local_dir", "")
-    if effective_local_dir:
-        cache_dir_key = _normalized_local_dir_key(effective_local_dir)
-        try:
-            local_rows = _cached_local_file_list(
-                dir_path=cache_dir_key,
-                nonce=int(st.session_state["local_refresh_nonce"]),
-                max_files=LOCAL_MAX_FILES,
-            )
-        except LocalDirNotFound as exc:
-            local_error = str(exc)
-        except LocalDirNotReadable as exc:
-            local_error = str(exc)
-        except TooManyFiles as exc:
-            local_error = f"{exc} Narrow the folder or set EGOLOGQA_LOCAL_MAX_FILES to a higher value."
-        except Exception as exc:  # pragma: no cover - defensive UI guard
-            local_error = f"Failed to list local files: {exc}"
-
-    if local_error:
-        st.error(local_error)
-
-    local_values = [row["path"] for row in local_rows]
-    local_options: list[str | None] = [None] + local_values
-    local_labels: dict[str | None, str] = {None: "Select an MCAP file"}
-    for row in local_rows:
-        local_labels[row["path"]] = make_local_option_label(str(row["name"]), int(row.get("size_bytes", 0)))
-
-    if st.session_state["selected_local_file"] not in local_values:
-        st.session_state["selected_local_file"] = None
-
-    selected_local_path = st.selectbox(
-        "MCAP file", options=local_options, key="selected_local_file",
-        format_func=lambda value: local_labels.get(value, str(value)),
+    uploaded_local_file = st.file_uploader(
+        "MCAP file",
+        type=["mcap"],
+        accept_multiple_files=False,
+        key="uploaded_local_file",
     )
+    if uploaded_local_file is not None:
+        upload_size = getattr(uploaded_local_file, "size", None)
+        size_text = human_bytes(upload_size if isinstance(upload_size, int) else None)
+        st.caption(f"Selected upload: {uploaded_local_file.name} ({size_text})")
+    else:
+        st.caption("Upload a local `.mcap` file to enable analysis.")
 
-    if not local_rows and not local_error and effective_local_dir:
-        st.info("No `.mcap` files found in this folder.")
-
-    if not selected_local_path:
-        st.caption("Choose a local file to enable analysis.")
-
-    if st.button("Analyze local file", type="primary", key="analyze_local", disabled=selected_local_path is None):
-        _run_analysis("Local disk", selected_hf_path=None, selected_local_path=selected_local_path)
+    if st.button("Analyze local file", type="primary", key="analyze_local", disabled=uploaded_local_file is None):
+        _run_analysis("Local disk", selected_hf_path=None, uploaded_local_file=uploaded_local_file)
 
 # ───────────────────────────────────────────────────────────────────────────
 # Render results if available

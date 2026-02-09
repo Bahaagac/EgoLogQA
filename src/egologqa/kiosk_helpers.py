@@ -5,6 +5,7 @@ import re
 import secrets
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 
 def resolve_runs_base_dir(env_value: str | None) -> Path:
@@ -82,6 +83,32 @@ def build_hf_display_label(path: str, prefix: str, size_bytes: int | None) -> st
 
 def make_local_option_label(name: str, size_bytes: int | None) -> str:
     return f"{name} ({human_bytes(size_bytes)})"
+
+
+def stage_uploaded_mcap(uploaded_file: Any, output_dir: Path) -> Path:
+    if uploaded_file is None:
+        raise RuntimeError("No uploaded file provided.")
+
+    raw_name = str(getattr(uploaded_file, "name", "") or "uploaded")
+    sanitized_name = sanitize_component(Path(raw_name).name)
+    staged_stem = Path(sanitized_name).stem or "uploaded"
+    staged_name = f"uploaded_{staged_stem}.mcap"
+    staged_dir = output_dir / "input"
+    staged_dir.mkdir(parents=True, exist_ok=True)
+    staged_path = staged_dir / staged_name
+
+    data: bytes
+    if hasattr(uploaded_file, "getbuffer"):
+        data = bytes(uploaded_file.getbuffer())
+    elif hasattr(uploaded_file, "getvalue"):
+        data = bytes(uploaded_file.getvalue())
+    elif hasattr(uploaded_file, "read"):
+        data = bytes(uploaded_file.read())
+    else:
+        raise RuntimeError("Uploaded file object is unsupported.")
+
+    staged_path.write_bytes(data)
+    return staged_path
 
 
 def build_timestamped_run_basename(file_name: str, suffix: str | None = None) -> str:

@@ -122,8 +122,8 @@ File:
 - `app/streamlit_app.py`
 
 Current behavior:
-- Kiosk-style two source tabs: Hugging Face + Local disk
-- Analyze disabled until a real selection is made
+- Kiosk-style two source tabs: Hugging Face + Local disk (upload-only)
+- Analyze disabled until a real selection is made (HF dropdown or local upload)
 - Synchronous progress updates (no worker queue)
 - Hidden advanced controls only when `EGOLOGQA_UI_ADVANCED=1`
 
@@ -141,6 +141,7 @@ Results rendering:
 Run storage defaults:
 - `~/.cache/egologqa/runs`
 - `latest_run.txt` pointer maintained
+- Local uploads are staged under each run directory (`<run>/input/uploaded_*.mcap`)
 
 ## 7) Report schema contract (top-level keys fixed)
 
