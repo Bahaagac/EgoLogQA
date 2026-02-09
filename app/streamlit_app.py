@@ -24,10 +24,6 @@ from egologqa.kiosk_helpers import (
     write_latest_run_pointer,
 )
 
-try:  # Backward-compatible with transient cloud package mismatches
-    from egologqa.kiosk_helpers import build_run_results_zip as _build_run_results_zip_helper
-except Exception:  # pragma: no cover - runtime fallback
-    _build_run_results_zip_helper = None
 from egologqa.pipeline import analyze_file
 from egologqa.ui_text import recommended_action_copy
 
@@ -226,10 +222,7 @@ def _error_box(exc: Exception, default_msg: str) -> None:
 
 
 def _build_run_results_zip_safe(output_dir: Path) -> Path:
-    if callable(_build_run_results_zip_helper):
-        return _build_run_results_zip_helper(output_dir)
-
-    # Fallback: keep app working if helper import is unavailable in deployed package.
+    # Local archive builder to avoid cross-module import skew during Cloud hot updates.
     output_dir = Path(output_dir)
     if not output_dir.exists() or not output_dir.is_dir():
         raise RuntimeError(f"Run directory does not exist: {output_dir}")
