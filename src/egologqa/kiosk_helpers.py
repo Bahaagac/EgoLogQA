@@ -187,13 +187,14 @@ def map_error_bucket(exc: Exception) -> str:
         return "Dataset requires auth. Set `HF_TOKEN`."
     if "404" in message or "not found" in message:
         return "Dataset/revision/path not found."
+    if "timed out" in message or "timeout" in message:
+        return "Hugging Face download timed out. Retry, or use Local disk mode."
     if (
         "failed to resolve 'huggingface.co'" in message
         or "name resolution" in message
         or "connectionerror" in message
         or "maxretryerror" in message
         or "network error" in message
-        or "timed out" in message
     ):
         return "Cannot reach huggingface.co. Check network/DNS/proxy."
     return "Could not load file list from Hugging Face."
