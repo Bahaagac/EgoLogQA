@@ -4,11 +4,18 @@ import html
 import hashlib
 import json
 import os
+import sys
 import zipfile
 from pathlib import Path
 from typing import Any
 
 import streamlit as st
+
+# Allow running the Streamlit app without editable install by resolving src layout.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_SRC_DIR = _REPO_ROOT / "src"
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
 
 from egologqa.config import load_config
 from egologqa.io.hf_fetch import list_mcap_files, resolve_cached_file
@@ -36,7 +43,7 @@ RUNS_BASE_DIR = resolve_runs_base_dir(os.getenv("EGOLOGQA_RUNS_DIR"))
 CONFIG_PATH = "configs/microagi00_ros2.yaml"
 ADVANCED_MODE = os.getenv("EGOLOGQA_UI_ADVANCED", "0") == "1"
 AI_SUMMARY_ENABLED = os.getenv("EGOLOGQA_AI_SUMMARY_ENABLED", "1") == "1"
-AI_SUMMARY_MODEL = os.getenv("EGOLOGQA_GEMINI_MODEL", "gemini-2.5-flash")
+AI_SUMMARY_MODEL_OVERRIDE = os.getenv("EGOLOGQA_GEMINI_MODEL")
 
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -638,24 +645,23 @@ def _render_full_results(report: dict[str, Any], output_dir: Path, ai_summary: d
     if not summary_line:
         summary_line = "Quality summary unavailable. Showing deterministic action guidance."
 
-    action_line = str(summary_payload.get("action_line") or deterministic_action_line(action_token)).strip()
-    source_label = "Gemini" if summary_payload.get("source") == "gemini" else "Deterministic fallback"
-    summary_error_code = str(summary_payload.get("error_code") or "").strip()
-    debug_label_html = ""
-    if ADVANCED_MODE and source_label == "Deterministic fallback" and summary_error_code:
-        debug_label_html = (
-            f'<div style="margin-top:0.15rem;font-size:0.72rem;color:#7a8194;">'
-            f'Debug: {html.escape(summary_error_code)}</div>'
-        )
+    explanation_line = str(summary_payload.get("explanation_line") or "").strip()
+    if not explanation_line:
+        explanation_line = "No additional anomaly explanation is available for this run."
 
+    insight_line = str(summary_payload.get("insight_line") or "").strip()
+    if not insight_line:
+        insight_line = "No secondary anomaly signal was identified for this run."
+
+    action_line = str(summary_payload.get("action_line") or deterministic_action_line(action_token)).strip()
     st.markdown(
         '<div class="act-card">'
         '<div class="act-lbl">Quick Summary</div>'
         f'<div class="act-txt">{html.escape(summary_line)}</div>'
+        f'<div class="act-txt" style="margin-top:0.15rem;">{html.escape(explanation_line)}</div>'
+        f'<div class="act-txt" style="margin-top:0.15rem;">{html.escape(insight_line)}</div>'
         f'<div style="margin-top:0.25rem;font-size:0.85rem;color:#1a1a2e;">'
         f'<strong>{html.escape(action_line)}</strong></div>'
-        f'<div style="margin-top:0.2rem;font-size:0.76rem;color:#7a8194;">{html.escape(source_label)}</div>'
-        f'{debug_label_html}'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -1185,7 +1191,7 @@ def _run_analysis(
             output_dir=output_dir,
             secrets=st.secrets,
             enabled=AI_SUMMARY_ENABLED,
-            model=AI_SUMMARY_MODEL,
+            model=AI_SUMMARY_MODEL_OVERRIDE,
         )
 
         run_dir = str(output_dir.resolve())

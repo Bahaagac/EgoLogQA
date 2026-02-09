@@ -2,38 +2,40 @@ from __future__ import annotations
 
 import json
 import os
-from collections import Counter
 from pathlib import Path
 from typing import Any
 
 
-_DEFAULT_MODEL = "gemini-2.5-flash"
-_MAX_SUMMARY_CHARS = 120
-_KEY_METRIC_KEYS = [
-    "file_total_messages",
-    "file_duration_s",
-    "file_bitrate_mbps",
-    "sync_p95_ms",
-    "sync_jitter_p95_ms",
-    "sync_drift_ms_per_min",
-    "sync_sample_count",
-    "drop_ratio",
-    "integrity_ok_ratio",
-    "integrity_coverage_seconds_est",
-    "vision_ok_ratio",
-    "vision_coverage_seconds_est",
-    "blur_fail_ratio",
-    "exposure_bad_ratio",
-    "depth_fail_ratio",
-    "depth_invalid_mean",
-    "rgb_decode_attempt_count",
-    "rgb_decode_success_count",
-    "depth_decode_attempt_count",
-    "depth_decode_success_count",
-    "blur_valid_frame_count",
-    "exposure_valid_frame_count",
-    "depth_valid_frame_count",
-]
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+_MAX_SUMMARY_CHARS = 150
+_MAX_EXPLANATION_CHARS = 220
+_MAX_INSIGHT_CHARS = 220
+
+PROJECT_BRIEF = (
+    "EgoLogQA is a deterministic quality-control analyzer for MicroAGI00-style ROS2 MCAP logs. "
+    "It checks timestamp integrity, RGB-depth sync, drop ratio, IMU coverage, RGB blur and exposure, "
+    "depth validity, and segment quality before recommending recording usage."
+)
+
+_REASON_HINTS = {
+    "FAIL_NO_RGB_STREAM": "RGB stream is missing, so visual quality cannot be validated.",
+    "FAIL_NO_CLEAN_SEGMENTS_LONG_ENOUGH": "No sufficiently long clean segment was found for reliable usage.",
+    "FAIL_SYNC_P95_GT_FAIL": "RGB-depth timing misalignment is severe.",
+    "FAIL_DROP_RATIO_GT_FAIL": "RGB frame-drop rate is too high for reliable continuity.",
+    "FAIL_DEPTH_FAIL_RATIO_GT_FAIL": "Depth failures are too frequent.",
+    "FAIL_DEPTH_INVALID_MEAN_GT_FAIL": "Depth invalid pixels are consistently too high.",
+    "WARN_SYNC_P95_GT_WARN": "RGB-depth alignment is unstable.",
+    "WARN_SYNC_JITTER_P95_GT_WARN": "Sync jitter is elevated, so alignment fluctuates between frames.",
+    "WARN_SYNC_DRIFT_ABS_GT_WARN": "Sync drift indicates alignment changes over time.",
+    "WARN_DROP_RATIO_GT_WARN": "RGB drops are above the warning threshold.",
+    "WARN_IMU_MISSING_RATIO_GT_WARN": "IMU coverage is incomplete.",
+    "WARN_BLUR_FAIL_RATIO_GT_WARN": "A noticeable portion of frames are blur-failed.",
+    "WARN_EXPOSURE_BAD_RATIO_GT_WARN": "Exposure quality is unstable in sampled frames.",
+    "WARN_DEPTH_INVALID_MEAN_GT_WARN": "Depth validity is degraded by invalid pixels.",
+    "WARN_DEPTH_TIMESTAMP_MISSING": "Depth timestamp availability is limited, reducing sync confidence.",
+    "WARN_DEPTH_PIXEL_DECODE_UNSUPPORTED": "Depth pixel decode is unavailable in this runtime.",
+    "WARN_RGB_PIXEL_DECODE_UNSUPPORTED": "RGB pixel decode is unavailable in this runtime.",
+}
 
 
 def resolve_gemini_api_key(secrets: Any | None) -> str | None:
@@ -55,68 +57,34 @@ def resolve_gemini_api_key(secrets: Any | None) -> str | None:
     return None
 
 
+def resolve_gemini_model_name(model_override: str | None) -> str:
+    if isinstance(model_override, str) and model_override.strip():
+        return model_override.strip()
+
+    env_value = os.getenv("EGOLOGQA_GEMINI_MODEL")
+    if isinstance(env_value, str) and env_value.strip():
+        return env_value.strip()
+
+    return DEFAULT_GEMINI_MODEL
+
+
 def build_curated_context(report: dict[str, Any], output_dir: Path) -> dict[str, Any]:
-    gate = report.get("gate", {})
-    gate = gate if isinstance(gate, dict) else {}
-    streams = report.get("streams", {})
-    streams = streams if isinstance(streams, dict) else {}
-    metrics = report.get("metrics", {})
-    metrics = metrics if isinstance(metrics, dict) else {}
-    errors = report.get("errors", [])
-    errors = errors if isinstance(errors, list) else []
-
-    integrity_segments = report.get("segments", [])
-    integrity_segments = integrity_segments if isinstance(integrity_segments, list) else []
-    clean_segments = _load_segments_from_metric(metrics, output_dir, "clean_segments_path")
-    clean_segments_nosync = _load_segments_from_metric(metrics, output_dir, "clean_segments_nosync_path")
-
-    key_metrics: dict[str, Any] = {}
-    for key in _KEY_METRIC_KEYS:
-        key_metrics[key] = metrics.get(key)
-
-    if isinstance(metrics.get("out_of_order"), dict):
-        key_metrics["out_of_order"] = metrics.get("out_of_order")
-    if isinstance(metrics.get("exposure_bad_reason_counts"), dict):
-        key_metrics["exposure_bad_reason_counts"] = metrics.get("exposure_bad_reason_counts")
-
+    del output_dir
+    report_payload = report if isinstance(report, dict) else {}
     return {
-        "system_context": {
-            "name": "EgoLogQA",
-            "purpose": "Quality gate and segment extractor for ROS2 MCAP logs.",
-            "checks": [
-                "timestamp integrity",
-                "rgb-depth sync and drop gaps",
-                "imu coverage",
-                "rgb blur and exposure",
-                "depth validity",
-                "integrity and clean segment extraction",
+        "project_brief": PROJECT_BRIEF,
+        "output_contract": {
+            "summary_line": "One short sentence: final quality outcome in plain language.",
+            "explanation_line": "One short sentence: primary cause behind the gate outcome.",
+            "insight_line": "One short sentence: secondary or unusual signal from the run.",
+            "format_rules": [
+                "No enum codes.",
+                "No file paths.",
+                "No action sentence.",
+                "No metric dump.",
             ],
         },
-        "gate": {
-            "gate": gate.get("gate"),
-            "recommended_action": gate.get("recommended_action"),
-            "fail_reasons": gate.get("fail_reasons", []),
-            "warn_reasons": gate.get("warn_reasons", []),
-        },
-        "segments": {
-            "integrity": _segment_stats(integrity_segments),
-            "clean": _segment_stats(clean_segments),
-            "clean_nosync": _segment_stats(clean_segments_nosync),
-        },
-        "stream_status": {
-            "rgb_timestamps_present": streams.get("rgb_timestamps_present"),
-            "depth_topic_present": streams.get("depth_topic_present"),
-            "depth_timestamps_present": streams.get("depth_timestamps_present"),
-            "decode_status": streams.get("decode_status"),
-            "topics": {
-                "rgb_topic": streams.get("rgb_topic"),
-                "depth_topic": streams.get("depth_topic"),
-                "imu_accel_topic": streams.get("imu_accel_topic"),
-                "imu_gyro_topic": streams.get("imu_gyro_topic"),
-            },
-        },
-        "metrics": key_metrics,
-        "error_counts": _error_counts(errors),
+        "report": report_payload,
     }
 
 
@@ -137,18 +105,24 @@ def fallback_summary(report: dict[str, Any]) -> dict[str, str]:
     gate = report.get("gate", {})
     gate = gate if isinstance(gate, dict) else {}
     gate_name = str(gate.get("gate") or "").upper()
+    reason_codes = _reason_codes_from_gate(gate)
 
     if gate_name == "PASS":
-        finding = "Quality checks passed with no warning or fail reasons."
+        summary = "Quality checks passed and the recording is usable as a whole sequence."
     elif gate_name == "WARN":
-        finding = "Quality checks found non-critical issues, so selective usage is safer."
+        summary = "Quality checks raised warnings, so selective usage is safer than full-sequence use."
     elif gate_name == "FAIL":
-        finding = "Critical quality checks failed, so this recording is not reliable as-is."
+        summary = "Critical quality checks failed, so this recording is not reliable as-is."
     else:
-        finding = "Quality outcome is unavailable due to missing analysis context."
+        summary = "Quality outcome is unavailable due to missing analysis context."
+
+    explanation = _fallback_explanation(gate_name, reason_codes)
+    insight = _fallback_insight(gate_name, reason_codes)
 
     return {
-        "summary_line": _normalize_line(finding, _MAX_SUMMARY_CHARS),
+        "summary_line": _normalize_line(summary, _MAX_SUMMARY_CHARS),
+        "explanation_line": _normalize_line(explanation, _MAX_EXPLANATION_CHARS),
+        "insight_line": _normalize_line(insight, _MAX_INSIGHT_CHARS),
         "action_line": deterministic_action_line(str(gate.get("recommended_action") or "")),
     }
 
@@ -158,12 +132,14 @@ def generate_summary_for_ui(
     output_dir: Path,
     secrets: Any | None,
     enabled: bool,
-    model: str,
+    model: str | None,
 ) -> dict[str, Any]:
-    selected_model = _normalize_model_name(model)
+    selected_model = resolve_gemini_model_name(model)
     fallback = fallback_summary(report)
     result: dict[str, Any] = {
         "summary_line": fallback["summary_line"],
+        "explanation_line": fallback["explanation_line"],
+        "insight_line": fallback["insight_line"],
         "action_line": fallback["action_line"],
         "source": "fallback",
         "model": selected_model,
@@ -207,16 +183,30 @@ def generate_summary_for_ui(
         return result
 
     summary_raw = payload.get("summary_line")
+    explanation_raw = payload.get("explanation_line")
+    insight_raw = payload.get("insight_line")
+
     if not isinstance(summary_raw, str) or not summary_raw.strip():
+        result["error_code"] = "AI_SUMMARY_SCHEMA_INVALID"
+        return result
+    if not isinstance(explanation_raw, str) or not explanation_raw.strip():
+        result["error_code"] = "AI_SUMMARY_SCHEMA_INVALID"
+        return result
+    if not isinstance(insight_raw, str) or not insight_raw.strip():
         result["error_code"] = "AI_SUMMARY_SCHEMA_INVALID"
         return result
 
     summary_line = _normalize_line(summary_raw, _MAX_SUMMARY_CHARS)
-    if not summary_line:
+    explanation_line = _normalize_line(explanation_raw, _MAX_EXPLANATION_CHARS)
+    insight_line = _normalize_line(insight_raw, _MAX_INSIGHT_CHARS)
+
+    if not summary_line or not explanation_line or not insight_line:
         result["error_code"] = "AI_SUMMARY_EMPTY"
         return result
 
     result["summary_line"] = summary_line
+    result["explanation_line"] = explanation_line
+    result["insight_line"] = insight_line
     result["source"] = "gemini"
     result.pop("error_code", None)
     return result
@@ -231,21 +221,26 @@ def _request_gemini_json_payload(context: dict[str, Any], api_key: str, model: s
 
     client = genai.Client(api_key=api_key)
     prompt = (
-        "Summarize this EgoLogQA run in exactly one short sentence.\n"
-        "Rules: plain language, no enum codes, no file paths, no metric dump.\n"
+        "Summarize this EgoLogQA analysis for an operator.\\n"
+        "Return JSON with exactly three keys: summary_line, explanation_line, insight_line.\\n"
+        "Constraints:\\n"
+        "- summary_line: one short sentence, outcome first.\\n"
+        "- explanation_line: one short sentence with the primary cause.\\n"
+        "- insight_line: one short sentence with secondary or unusual signal.\\n"
+        "- plain language only, no enum names, no file paths, no action sentence, no metric dump.\\n"
         f"Context JSON: {json.dumps(context, sort_keys=True, separators=(',', ':'))}"
     )
 
     response = client.models.generate_content(
-        model=_normalize_model_name(model),
+        model=resolve_gemini_model_name(model),
         contents=prompt,
         config=types.GenerateContentConfig(
             system_instruction=(
-                "You summarize robot-log quality checks for operators. "
-                "Return concise, actionable wording only."
+                "You explain robot-log quality outcomes for operators. "
+                "Be concise, factual, and non-redundant."
             ),
             temperature=0.1,
-            max_output_tokens=80,
+            max_output_tokens=260,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
             response_mime_type="application/json",
             response_schema={
@@ -253,10 +248,18 @@ def _request_gemini_json_payload(context: dict[str, Any], api_key: str, model: s
                 "properties": {
                     "summary_line": {
                         "type": "string",
-                        "description": "Single short sentence on the most important run outcome.",
-                    }
+                        "description": "Short plain-language outcome summary.",
+                    },
+                    "explanation_line": {
+                        "type": "string",
+                        "description": "Short primary-cause explanation without action text.",
+                    },
+                    "insight_line": {
+                        "type": "string",
+                        "description": "Short secondary/unusual-signal note without action text.",
+                    },
                 },
-                "required": ["summary_line"],
+                "required": ["summary_line", "explanation_line", "insight_line"],
             },
         ),
     )
@@ -280,11 +283,6 @@ def _request_gemini_json_payload(context: dict[str, Any], api_key: str, model: s
     raise RuntimeError("AI_SUMMARY_EMPTY_RESPONSE")
 
 
-def _normalize_model_name(model: str) -> str:
-    value = str(model or "").strip()
-    return value if value else _DEFAULT_MODEL
-
-
 def _normalize_line(text: str, max_chars: int) -> str:
     compact = " ".join(str(text).split())
     if len(compact) <= max_chars:
@@ -292,70 +290,55 @@ def _normalize_line(text: str, max_chars: int) -> str:
     return compact[: max_chars - 3].rstrip() + "..."
 
 
-def _as_float(value: Any) -> float | None:
-    try:
-        out = float(value)
-    except (TypeError, ValueError):
-        return None
-    if out != out:
-        return None
-    return out
+def _reason_codes_from_gate(gate: dict[str, Any]) -> list[str]:
+    fail_reasons = gate.get("fail_reasons") if isinstance(gate.get("fail_reasons"), list) else []
+    warn_reasons = gate.get("warn_reasons") if isinstance(gate.get("warn_reasons"), list) else []
+    ordered = fail_reasons if fail_reasons else warn_reasons
+    return [str(code) for code in ordered if code]
 
 
-def _segment_stats(segments: list[dict[str, Any]]) -> dict[str, Any]:
-    count = 0
-    total_duration_s = 0.0
-    for segment in segments:
-        if not isinstance(segment, dict):
-            continue
-        count += 1
-        duration = _as_float(segment.get("duration_s"))
-        if duration is not None and duration > 0.0:
-            total_duration_s += duration
-    return {
-        "count": count,
-        "total_duration_s": round(total_duration_s, 3),
-    }
+def _fallback_explanation(gate_name: str, reason_codes: list[str]) -> str:
+    if reason_codes:
+        return _reason_hint_for_code(reason_codes[0])
+
+    if gate_name == "PASS":
+        return "No primary anomalies were detected by integrity, timing, or pixel-quality checks."
+    return "A primary cause could not be extracted from the current gate reason payload."
 
 
-def _load_segments_from_metric(
-    metrics: dict[str, Any], output_dir: Path, key: str
-) -> list[dict[str, Any]]:
-    relpath = metrics.get(key)
-    if not relpath:
-        return []
-    path = output_dir / str(relpath)
-    if not path.exists() or not path.is_file():
-        return []
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-    if not isinstance(payload, list):
-        return []
-    return [item for item in payload if isinstance(item, dict)]
+def _fallback_insight(gate_name: str, reason_codes: list[str]) -> str:
+    if len(reason_codes) >= 2:
+        insight = _reason_hint_for_code(reason_codes[1])
+        if len(reason_codes) > 2:
+            insight += " Additional checks also triggered."
+        return insight
+
+    if len(reason_codes) == 1:
+        return "No secondary anomaly was reported beyond the primary flagged check."
+
+    if gate_name == "PASS":
+        return "No unusual warning or fail reasons were reported for this run."
+    return "No secondary anomaly detail is available in this analysis output."
 
 
-def _error_counts(errors: list[Any]) -> dict[str, list[dict[str, Any]]]:
-    warn_counts: Counter[str] = Counter()
-    error_counts: Counter[str] = Counter()
-    for item in errors:
-        if not isinstance(item, dict):
-            continue
-        code = str(item.get("code") or "UNKNOWN")
-        severity = str(item.get("severity") or "").upper()
-        if severity == "WARN":
-            warn_counts[code] += 1
-        elif severity == "ERROR":
-            error_counts[code] += 1
+def _reason_hint_for_code(code: str) -> str:
+    direct = _REASON_HINTS.get(code)
+    if direct:
+        return direct
 
-    def _rows(counter: Counter[str]) -> list[dict[str, Any]]:
-        return [
-            {"code": code, "count": count}
-            for code, count in sorted(counter.items(), key=lambda item: (-item[1], item[0]))
-        ]
-
-    return {
-        "warn_codes": _rows(warn_counts),
-        "error_codes": _rows(error_counts),
-    }
+    upper_code = code.upper()
+    if "SYNC" in upper_code:
+        return "RGB-depth timing alignment is unstable."
+    if "DROP_RATIO" in upper_code:
+        return "Frame-drop behavior is above target thresholds."
+    if "IMU" in upper_code:
+        return "IMU coverage or consistency is below expectations."
+    if "BLUR" in upper_code:
+        return "Image sharpness is below target on many sampled frames."
+    if "EXPOSURE" in upper_code:
+        return "Exposure quality indicates unstable lighting conditions."
+    if "DEPTH" in upper_code:
+        return "Depth quality checks indicate unreliable depth values."
+    if "RGB" in upper_code:
+        return "RGB stream quality is degraded in a gating check."
+    return "A quality gate reason triggered outside normal operating thresholds."

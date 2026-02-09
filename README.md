@@ -165,7 +165,7 @@ Env overrides:
 - `EGOLOGQA_HF_CACHE_DIR`
 - `EGOLOGQA_RUNS_DIR`
 - `EGOLOGQA_AI_SUMMARY_ENABLED` (`1` by default, set `0` to disable AI summary)
-- `EGOLOGQA_GEMINI_MODEL` (default `gemini-2.5-flash`)
+- `EGOLOGQA_GEMINI_MODEL` (optional override; default is `DEFAULT_GEMINI_MODEL` in `src/egologqa/ai_summary.py`)
 - `HF_TOKEN` (optional, not shown in UI)
 - `GOOGLE_API_KEY` or `GEMINI_API_KEY` (optional, for Gemini summary)
 
@@ -176,16 +176,20 @@ Developer-only advanced panel:
 
 ### AI Summary (Gemini)
 
-The main results page includes an automatic two-line quick summary per completed run:
+The main results page includes a quick summary with three AI lines plus one deterministic action line per completed run:
 
-- Line 1: one short AI-generated finding sentence
-- Line 2: deterministic action line from the gate action token
+- Line 1 (AI): outcome summary (`summary_line`)
+- Line 2 (AI): primary-cause explanation (`explanation_line`)
+- Line 3 (AI): secondary/unusual signal (`insight_line`)
+- Action line (deterministic): gate-action guidance (`action_line`)
 
 Behavior:
 
 - The feature is UI-only and does not modify `report.json`.
-- If API key, SDK, network, or model response fails, the app falls back to deterministic summary text.
+- Gemini receives a project brief plus the full analysis `report.json` content for context.
+- If API key, SDK, network, or model response fails, the app falls back to deterministic summary, explanation, and insight lines.
 - API key precedence is: `GOOGLE_API_KEY`, `GEMINI_API_KEY`, then `st.secrets`.
+- Model resolution precedence is: explicit override argument, then `EGOLOGQA_GEMINI_MODEL`, then `DEFAULT_GEMINI_MODEL`.
 
 ## Validation Pack
 
