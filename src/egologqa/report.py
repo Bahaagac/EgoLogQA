@@ -89,6 +89,9 @@ def empty_report(input_path: str, file_size_bytes: int | None = None, commit: st
             "frames_analyzed": 0,
         },
         "metrics": {
+            "file_total_messages": None,
+            "file_duration_s": None,
+            "file_bitrate_mbps": None,
             "sync_p50_ms": None,
             "sync_p95_ms": None,
             "sync_max_ms": None,

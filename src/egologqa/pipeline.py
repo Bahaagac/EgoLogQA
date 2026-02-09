@@ -128,6 +128,31 @@ def analyze_file(
         scan_start = perf_counter()
         source_obj: MessageSource = source if source is not None else MCapMessageSource(input_path)
         topic_stats = source_obj.scan_topics()
+
+        file_total_messages = 0
+        file_start_ns: int | None = None
+        file_end_ns: int | None = None
+        for info in topic_stats.values():
+            file_total_messages += int(info.message_count)
+            if info.first_log_time_ns is not None:
+                if file_start_ns is None or info.first_log_time_ns < file_start_ns:
+                    file_start_ns = int(info.first_log_time_ns)
+            if info.last_log_time_ns is not None:
+                if file_end_ns is None or info.last_log_time_ns > file_end_ns:
+                    file_end_ns = int(info.last_log_time_ns)
+
+        file_duration_s: float | None = None
+        if file_start_ns is not None and file_end_ns is not None:
+            file_duration_s = float(max(0, file_end_ns - file_start_ns) / 1_000_000_000.0)
+
+        file_bitrate_mbps: float | None = None
+        if file_size is not None and file_duration_s is not None and file_duration_s > 0.0:
+            file_bitrate_mbps = float((file_size * 8.0) / (file_duration_s * 1_000_000.0))
+
+        report["metrics"]["file_total_messages"] = file_total_messages
+        report["metrics"]["file_duration_s"] = file_duration_s
+        report["metrics"]["file_bitrate_mbps"] = file_bitrate_mbps
+
         selected = select_topics(cfg, topic_stats)
         report["streams"]["rgb_topic"] = selected.rgb_topic
         report["streams"]["depth_topic"] = selected.depth_topic
