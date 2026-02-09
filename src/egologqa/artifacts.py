@@ -339,6 +339,8 @@ def write_exposure_debug_csv(
         "roi_margin_ratio",
         "low_clip",
         "high_clip",
+        "high_clip_luma",
+        "high_clip_any_channel",
         "p01",
         "p05",
         "p50",

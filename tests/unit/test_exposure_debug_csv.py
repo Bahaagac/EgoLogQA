@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -120,7 +121,13 @@ def test_exposure_debug_csv_written_when_enabled() -> None:
         result = analyze_file("dummy.mcap", Path(d), cfg, source=source)
         rel = result.report["metrics"]["exposure_debug_csv_path"]
         assert rel is not None
-        assert (Path(d) / rel).exists()
+        csv_path = Path(d) / rel
+        assert csv_path.exists()
+        with csv_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            assert reader.fieldnames is not None
+            assert "high_clip_luma" in reader.fieldnames
+            assert "high_clip_any_channel" in reader.fieldnames
 
 
 def test_exposure_debug_csv_not_written_when_disabled() -> None:

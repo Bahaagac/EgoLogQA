@@ -29,6 +29,7 @@ from egologqa.kiosk_helpers import (
     write_latest_run_pointer,
 )
 from egologqa.pipeline import analyze_file
+from egologqa.ui_text import recommended_action_copy
 
 
 HF_REPO_ID = os.getenv("EGOLOGQA_HF_REPO_ID", "MicroAGI-Labs/MicroAGI00")
@@ -143,18 +144,28 @@ def _render_gate_summary(report: dict[str, Any]) -> None:
     display_gate = {"PASS": "PASS", "WARN": "WARNING", "FAIL": "FAIL"}.get(
         str(gate_name), str(gate_name)
     )
+    fail_reasons = gate.get("fail_reasons", [])
+    warn_reasons = gate.get("warn_reasons", [])
     if gate_name == "PASS":
         st.success(f"Overall Result: {display_gate}")
     elif gate_name == "WARN":
         st.warning(f"Overall Result: {display_gate}")
     else:
         st.error(f"Overall Result: {display_gate}")
-    st.write(f"Recommended action: `{gate.get('recommended_action')}`")
+    action_token = str(gate.get("recommended_action") or "UNKNOWN")
+    action_copy = recommended_action_copy(
+        action_token=action_token,
+        gate=str(gate_name),
+        fail_reasons=fail_reasons,
+        warn_reasons=warn_reasons,
+    )
+    st.markdown("**Recommended action**")
+    st.caption(f"Token: `{action_token}`")
+    st.write(f"What to do now: {action_copy['what_to_do']}")
+    st.caption(f"Why: {action_copy['why']}")
     if gate_name == "PASS":
         return
 
-    fail_reasons = gate.get("fail_reasons", [])
-    warn_reasons = gate.get("warn_reasons", [])
     if gate_name == "FAIL" and fail_reasons:
         _render_reason_table("Failure Reasons", "FAIL", fail_reasons, report)
     if gate_name in {"WARN", "FAIL"} and warn_reasons:
@@ -710,6 +721,9 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
         level=3,
     )
     st.json(metrics.get("exposure_bad_reason_counts", {}))
+    st.caption(
+        "Bright-looking frames are counted as high-clip only when clipped highlight area is above the high-clip threshold."
+    )
 
     _render_header(
         "Integrity Segments",

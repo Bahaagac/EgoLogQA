@@ -126,15 +126,24 @@ def compute_rgb_pixel_metrics(
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             blur_roi, blur_margin_used = _blur_roi(gray, thresholds.blur_roi_margin_ratio)
             blur_score = float(cv2.Laplacian(blur_roi, cv2.CV_64F).var())
-            roi, margin_used = _exposure_roi(gray, thresholds.exposure_roi_margin_ratio)
+            gray_roi, margin_used = _exposure_roi(gray, thresholds.exposure_roi_margin_ratio)
+            bgr_roi, _ = _exposure_roi(frame, thresholds.exposure_roi_margin_ratio)
 
-            low_clip = float(np.mean(roi <= thresholds.low_clip_pixel_value))
-            high_clip = float(np.mean(roi >= thresholds.high_clip_pixel_value))
-            p01 = float(np.percentile(roi, 1))
-            p05 = float(np.percentile(roi, 5))
-            p50 = float(np.percentile(roi, 50))
-            p95 = float(np.percentile(roi, 95))
-            p99 = float(np.percentile(roi, 99))
+            low_clip = float(np.mean(gray_roi <= thresholds.low_clip_pixel_value))
+            high_clip_luma = float(
+                np.mean(gray_roi >= thresholds.high_clip_pixel_value)
+            )
+            # Channel-aware clipping catches strongly tinted highlight saturation
+            # cases that grayscale-only clipping can miss.
+            high_clip_any_channel = float(
+                np.mean(np.max(bgr_roi, axis=2) >= thresholds.high_clip_pixel_value)
+            )
+            high_clip = max(high_clip_luma, high_clip_any_channel)
+            p01 = float(np.percentile(gray_roi, 1))
+            p05 = float(np.percentile(gray_roi, 5))
+            p50 = float(np.percentile(gray_roi, 50))
+            p95 = float(np.percentile(gray_roi, 95))
+            p99 = float(np.percentile(gray_roi, 99))
             contrast = p99 - p01
             dynamic_range = p95 - p05
 
@@ -191,6 +200,8 @@ def compute_rgb_pixel_metrics(
                     "blur_value": blur_score,
                     "low_clip": low_clip,
                     "high_clip": high_clip,
+                    "high_clip_luma": high_clip_luma,
+                    "high_clip_any_channel": high_clip_any_channel,
                     "p01": p01,
                     "p05": p05,
                     "p50": p50,
@@ -332,16 +343,16 @@ def compute_depth_pixel_metrics(
     return metrics, depth_ok
 
 
-def _exposure_roi(gray: np.ndarray, margin_ratio: float) -> tuple[np.ndarray, float]:
-    h, w = gray.shape[:2]
+def _exposure_roi(frame: np.ndarray, margin_ratio: float) -> tuple[np.ndarray, float]:
+    h, w = frame.shape[:2]
     margin = int(min(h, w) * margin_ratio)
     y0 = margin
     y1 = h - margin
     x0 = margin
     x1 = w - margin
     if y1 <= y0 or x1 <= x0:
-        return gray, 0.0
-    return gray[y0:y1, x0:x1], float(margin_ratio)
+        return frame, 0.0
+    return frame[y0:y1, x0:x1], float(margin_ratio)
 
 
 def _blur_roi(gray: np.ndarray, margin_ratio: float) -> tuple[np.ndarray, float]:
