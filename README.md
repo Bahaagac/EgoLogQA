@@ -37,6 +37,13 @@ through metrics and WARN reasons.
 
 Exposure diagnostics are exported to `debug/exposure_samples.csv` by default.
 
+Recommended actions:
+
+- `USE_FULL_SEQUENCE`
+- `USE_SEGMENTS_ONLY`
+- `FIX_TIME_ALIGNMENT`
+- `RECAPTURE_OR_SKIP`
+
 Note: `thresholds.contrast_min`, `thresholds.low_clip_threshold`, and
 `thresholds.high_clip_threshold` remain in config for backward compatibility but
 are not used by the v1.3 exposure classifier.
@@ -51,12 +58,19 @@ Output directory contains:
 - `plots/sync_histogram.png` (when sync deltas are available)
 - `plots/drop_timeline.png` (when RGB timestamps are available)
 - `debug/exposure_samples.csv` (when RGB decode succeeds and debug export is enabled)
+- `debug/exposure_low_clip_frames/*.jpg` (when exposure evidence export is active)
+- `debug/exposure_high_clip_frames/*.jpg` (when exposure evidence export is active)
+- `debug/exposure_flat_and_dark_frames/*.jpg` (when exposure evidence export is active)
+- `debug/exposure_flat_and_bright_frames/*.jpg` (when exposure evidence export is active)
+- `debug/exposure_evidence_error.txt` (when exposure evidence selection falls back)
 - `debug/blur_samples.csv` (when blur/depth debug CSV export is enabled)
 - `debug/depth_samples.csv` (when blur/depth debug CSV export is enabled)
 - `debug/blur_fail_frames/*.jpg` (when evidence export is enabled or blur WARN auto-export triggers)
 - `debug/blur_pass_frames/*.jpg` (when evidence export is enabled or blur WARN auto-export triggers)
 - `debug/blur_fail_frames_annotated/*.jpg` (when `debug.write_annotated_evidence=true`)
 - `debug/blur_pass_frames_annotated/*.jpg` (when `debug.write_annotated_evidence=true`)
+- `debug/clean_segments.json` (WARN-strict clean segments)
+- `debug/clean_segments_nosync.json` (counterfactual clean segments with sync forced-good)
 - `debug/evidence_manifest.json` (when `debug.write_evidence_manifest=true`)
 - `debug/benchmarks.json` (when `--bench` or `debug.benchmarks_enabled=true`)
 
@@ -88,7 +102,13 @@ Blur WARN rule:
 - if no valid decoded RGB frames are available for blur, `blur_fail_ratio` is null and
   `errors[]` includes `BLUR_UNAVAILABLE_NO_DECODE`
 
-Integrity segments remain the source of FAIL/no-segment decisions; vision metrics are advisory/WARN-only.
+Sync diagnostics:
+
+- signed sync delta is `depth_time - rgb_time`
+- positive signed offset means depth is later than RGB
+- when stable offset is detected, action can be `FIX_TIME_ALIGNMENT`
+
+Integrity segments remain available for context. FAIL/no-clean decisions are based on WARN-strict clean segments.
 
 ## Git Hygiene
 

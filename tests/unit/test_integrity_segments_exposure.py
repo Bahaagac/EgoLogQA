@@ -118,8 +118,9 @@ def test_exposure_bad_does_not_erase_integrity_segments() -> None:
         result = analyze_file("dummy.mcap", Path(d), cfg, source=source)
 
     assert len(result.report["segments"]) > 0
-    assert "FAIL_NO_CLEAN_SEGMENTS_LONG_ENOUGH" not in result.report["gate"]["fail_reasons"]
-    assert result.report["gate"]["gate"] != "FAIL"
+    assert "FAIL_NO_CLEAN_SEGMENTS_LONG_ENOUGH" in result.report["gate"]["fail_reasons"]
+    assert result.report["gate"]["gate"] == "FAIL"
+    assert result.report["gate"]["recommended_action"] == "USE_SEGMENTS_ONLY"
     assert "WARN_EXPOSURE_BAD_RATIO_GT_WARN" in result.report["gate"]["warn_reasons"]
 
 

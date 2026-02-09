@@ -46,6 +46,7 @@ def write_rgb_previews(
     frames_by_pos: dict[int, np.ndarray],
     output_dir: str | Path,
     max_previews: int = 12,
+    exclude_positions: set[int] | None = None,
 ) -> list[str]:
     if not frames_by_pos:
         return []
@@ -56,7 +57,12 @@ def write_rgb_previews(
     preview_dir = Path(output_dir) / "previews"
     preview_dir.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
-    for idx, pos in enumerate(sorted(frames_by_pos.keys())[:max_previews]):
+    excluded = exclude_positions or set()
+    ordered_positions = sorted(frames_by_pos.keys())
+    preferred_positions = [pos for pos in ordered_positions if pos not in excluded]
+    fallback_positions = [pos for pos in ordered_positions if pos in excluded]
+    selected_positions = (preferred_positions + fallback_positions)[:max_previews]
+    for idx, pos in enumerate(selected_positions):
         frame = frames_by_pos[pos]
         file_name = f"rgb_{idx:04d}_sample_{pos:06d}.png"
         path = preview_dir / file_name
@@ -286,6 +292,139 @@ def write_depth_debug_csv(
         for row in rows:
             formatted = {key: _format_csv_value(row.get(key)) for key in fields}
             writer.writerow(formatted)
+    return str(out_path)
+
+
+def write_clean_segments_json(
+    segments: list[dict[str, Any]],
+    output_dir: str | Path,
+    file_name: str,
+) -> str | None:
+    debug_dir = Path(output_dir) / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    out_path = debug_dir / file_name
+    payload = sanitize_json_value(list(segments))
+    with out_path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        handle.write("\n")
+    return str(out_path)
+
+
+def select_exposure_evidence_rows(
+    exposure_rows: list[dict[str, Any]],
+    k: int,
+) -> tuple[dict[str, list[dict[str, Any]]], list[str]]:
+    reason_order = ["low_clip", "high_clip", "flat_and_dark", "flat_and_bright"]
+    selected: dict[str, list[dict[str, Any]]] = {reason: [] for reason in reason_order}
+    warnings: list[str] = []
+    if k <= 0:
+        return selected, warnings
+
+    for reason in reason_order:
+        candidates = [row for row in exposure_rows if reason in _parse_reasons(row.get("reasons"))]
+        if not candidates:
+            continue
+        if reason == "low_clip":
+            ordered, used_fallback = _sort_or_fallback(
+                candidates,
+                value_keys=("low_clip",),
+                key_fn=lambda row: (-float(row["low_clip"]), int(row.get("sample_i", 0))),
+            )
+        elif reason == "high_clip":
+            ordered, used_fallback = _sort_or_fallback(
+                candidates,
+                value_keys=("high_clip",),
+                key_fn=lambda row: (-float(row["high_clip"]), int(row.get("sample_i", 0))),
+            )
+        elif reason == "flat_and_dark":
+            ordered, used_fallback = _sort_or_fallback(
+                candidates,
+                value_keys=("dynamic_range", "p50"),
+                key_fn=lambda row: (
+                    float(row["dynamic_range"]),
+                    float(row["p50"]),
+                    int(row.get("sample_i", 0)),
+                ),
+            )
+        else:
+            ordered, used_fallback = _sort_or_fallback(
+                candidates,
+                value_keys=("dynamic_range", "p50"),
+                key_fn=lambda row: (
+                    float(row["dynamic_range"]),
+                    -float(row["p50"]),
+                    int(row.get("sample_i", 0)),
+                ),
+            )
+        if used_fallback:
+            warnings.append(
+                f"{reason}: missing one or more scoring columns; used sample_i fallback ordering"
+            )
+        selected[reason] = ordered[:k]
+    return selected, warnings
+
+
+def write_exposure_evidence_frames(
+    selected_rows: dict[str, list[dict[str, Any]]],
+    rgb_frames_by_pos: dict[int, np.ndarray],
+    output_dir: str | Path,
+) -> dict[str, str | None]:
+    out: dict[str, str | None] = {
+        "low_clip": None,
+        "high_clip": None,
+        "flat_and_dark": None,
+        "flat_and_bright": None,
+    }
+    try:
+        import cv2
+    except Exception:
+        return out
+    debug_dir = Path(output_dir) / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    dir_by_reason = {
+        "low_clip": debug_dir / "exposure_low_clip_frames",
+        "high_clip": debug_dir / "exposure_high_clip_frames",
+        "flat_and_dark": debug_dir / "exposure_flat_and_dark_frames",
+        "flat_and_bright": debug_dir / "exposure_flat_and_bright_frames",
+    }
+    for reason, rows in selected_rows.items():
+        if reason not in dir_by_reason:
+            continue
+        target_dir = dir_by_reason[reason]
+        target_dir.mkdir(parents=True, exist_ok=True)
+        wrote = 0
+        for rank, row in enumerate(rows, start=1):
+            sample_i = int(row.get("sample_i", 0))
+            frame = rgb_frames_by_pos.get(sample_i)
+            if frame is None:
+                continue
+            t_ms = float(row.get("t_ms", 0.0))
+            score_suffix = _exposure_score_suffix(reason, row)
+            file_name = (
+                f"{reason}_rank{rank:02d}_i{sample_i:04d}_t{t_ms:.0f}_{score_suffix}.jpg"
+            )
+            out_path = target_dir / file_name
+            ok = cv2.imwrite(
+                str(out_path),
+                frame,
+                [int(cv2.IMWRITE_JPEG_QUALITY), 90],
+            )
+            if ok:
+                wrote += 1
+        out[reason] = str(target_dir) if wrote > 0 else None
+    return out
+
+
+def write_exposure_evidence_error(
+    warnings: list[str],
+    output_dir: str | Path,
+) -> str | None:
+    if not warnings:
+        return None
+    debug_dir = Path(output_dir) / "debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    out_path = debug_dir / "exposure_evidence_error.txt"
+    out_path.write_text("\n".join(warnings) + "\n", encoding="utf-8")
     return str(out_path)
 
 
@@ -571,6 +710,50 @@ def _evidence_file_name(prefix: str, rank: int, row: dict[str, Any]) -> str:
     t_ms = float(row.get("t_ms", 0.0))
     blur_value = float(row.get("blur_value", 0.0))
     return f"{prefix}_rank{rank:02d}_i{sample_i:04d}_t{t_ms:.0f}_blur{blur_value:.2f}.jpg"
+
+
+def _parse_reasons(raw: Any) -> set[str]:
+    if not isinstance(raw, str):
+        return set()
+    return {part.strip() for part in raw.split(";") if part.strip()}
+
+
+def _sort_or_fallback(
+    rows: list[dict[str, Any]],
+    value_keys: tuple[str, ...],
+    key_fn: Any,
+) -> tuple[list[dict[str, Any]], bool]:
+    complete = []
+    for row in rows:
+        if all(_to_float(row.get(key)) is not None for key in value_keys):
+            complete.append(row)
+    if len(complete) == len(rows):
+        return sorted(complete, key=key_fn), False
+    # Fallback remains scoped to this reason's own candidate rows.
+    return sorted(rows, key=lambda row: int(row.get("sample_i", 0))), True
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _exposure_score_suffix(reason: str, row: dict[str, Any]) -> str:
+    if reason == "low_clip":
+        low_clip = _to_float(row.get("low_clip")) or 0.0
+        p50 = _to_float(row.get("p50")) or 0.0
+        return f"lc{low_clip:.2f}_p50{p50:.0f}"
+    if reason == "high_clip":
+        high_clip = _to_float(row.get("high_clip")) or 0.0
+        p50 = _to_float(row.get("p50")) or 0.0
+        return f"hc{high_clip:.2f}_p50{p50:.0f}"
+    dynamic_range = _to_float(row.get("dynamic_range")) or 0.0
+    p50 = _to_float(row.get("p50")) or 0.0
+    return f"dr{dynamic_range:.2f}_p50{p50:.0f}"
 
 
 def _format_csv_value(value: Any) -> Any:

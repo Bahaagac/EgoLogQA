@@ -19,6 +19,12 @@ thresholds:
   imu_gap_factor: 5.0
   sync_warn_ms: 16.0
   sync_fail_ms: 33.0
+  sync_min_samples: 30
+  sync_jitter_warn_ms: 5.0
+  sync_drift_warn_ms_per_min: 10.0
+  sync_stable_std_max_ms: 2.0
+  sync_stable_jitter_p95_max_ms: 2.0
+  sync_stable_drift_abs_max_ms_per_min: 5.0
   imu_window_ms: 20.0
   # Tuned for 1080p MicroAGI00 streams. Retune for different resolutions.
   blur_threshold_min: 80.0
@@ -43,6 +49,9 @@ thresholds:
   blur_fail_warn_ratio: 0.20
   exposure_bad_warn_ratio: 0.20
   depth_invalid_mean_warn: 0.35
+  depth_fail_ratio_fail: 0.50
+  depth_invalid_mean_fail: 0.60
+  pass_exposure_evidence_k: 2
 segments:
   max_gap_fill_ms: 200.0
   min_segment_seconds: 5.0

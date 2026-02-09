@@ -12,12 +12,17 @@ from egologqa.artifacts import (
     write_blur_annotated_evidence_frames,
     write_blur_evidence_frames,
     write_benchmarks_json,
+    write_clean_segments_json,
     write_depth_debug_csv,
     write_drop_timeline,
     write_evidence_manifest_json,
+    write_exposure_evidence_error,
+    write_exposure_evidence_frames,
     write_exposure_debug_csv,
     write_report_markdown,
     write_rgb_previews,
+    select_exposure_evidence_rows,
+    select_blur_evidence_rows,
     write_sync_histogram,
 )
 from egologqa.config import apply_topic_overrides, config_to_dict
@@ -25,7 +30,7 @@ from egologqa.decoders.depth import decode_depth_message
 from egologqa.decoders.rgb import decode_rgb_message
 from egologqa.drop_regions import DropRegions
 from egologqa.frame_flags import build_frame_flags
-from egologqa.gate import evaluate_gate
+from egologqa.gate import classify_sync_pattern, evaluate_gate, sync_offset_estimate_ms
 from egologqa.io.reader import MCapMessageSource, MessageSource
 from egologqa.metrics.pixel_metrics import compute_depth_pixel_metrics, compute_rgb_pixel_metrics
 from egologqa.metrics.time_metrics import (
@@ -604,93 +609,27 @@ def analyze_file(
             depth_csv_path = _timed_artifact_write(write_depth_debug_csv, depth_rows, output_dir)
             report["metrics"]["depth_debug_csv_path"] = _relative_path(depth_csv_path, output_dir)
 
-        blur_warn_trigger = (
-            report["metrics"].get("blur_fail_ratio") is not None
-            and float(report["metrics"]["blur_fail_ratio"]) > cfg.thresholds.blur_fail_warn_ratio
-        )
-        should_export_evidence = cfg.debug.export_evidence_frames or (
-            cfg.debug.export_evidence_on_warn and blur_warn_trigger
-        )
-        evidence_requested = (
-            should_export_evidence
-            or cfg.debug.write_annotated_evidence
-            or cfg.debug.write_evidence_manifest
-        )
         blur_fail_evidence_rows: list[dict[str, Any]] = []
         blur_pass_evidence_rows: list[dict[str, Any]] = []
-        if evidence_requested:
-            for row in blur_rows:
-                if int(row.get("decode_ok", 0)) != 1:
-                    continue
-                if row.get("blur_value") is None or row.get("blur_ok") is None:
-                    continue
-                pos = int(row["sample_i"])
-                frame = rgb_frames_by_pos.get(pos)
-                if frame is None:
-                    continue
-                evidence_row = {
-                    "sample_i": pos,
-                    "t_ms": float(row["t_ms"]),
-                    "blur_value": float(row["blur_value"]),
-                    "frame": frame,
-                }
-                if int(row["blur_ok"]) == 0:
-                    blur_fail_evidence_rows.append(evidence_row)
-                else:
-                    blur_pass_evidence_rows.append(evidence_row)
-
-        cv2_available = _cv2_available()
-        fail_dir = None
-        pass_dir = None
-        if evidence_requested and cv2_available:
-            fail_dir, pass_dir = _timed_artifact_write(
-                write_blur_evidence_frames,
-                blur_fail_evidence_rows,
-                blur_pass_evidence_rows,
-                output_dir,
-                cfg.debug.evidence_frames_k,
-            )
-        if evidence_requested:
-            report["metrics"]["blur_fail_frames_dir"] = _relative_path(fail_dir, output_dir)
-            report["metrics"]["blur_pass_frames_dir"] = _relative_path(pass_dir, output_dir)
-
-        annotated_fail_dir = None
-        annotated_pass_dir = None
-        if cfg.debug.write_annotated_evidence and cv2_available:
-            annotated_fail_dir, annotated_pass_dir = _timed_artifact_write(
-                write_blur_annotated_evidence_frames,
-                blur_fail_evidence_rows,
-                blur_pass_evidence_rows,
-                output_dir,
-                cfg.debug.evidence_frames_k,
-                blur_threshold if blur_threshold is not None else None,
-            )
-            if annotated_fail_dir:
-                report["metrics"]["blur_fail_frames_annotated_dir"] = _relative_path(
-                    annotated_fail_dir, output_dir
-                )
-            if annotated_pass_dir:
-                report["metrics"]["blur_pass_frames_annotated_dir"] = _relative_path(
-                    annotated_pass_dir, output_dir
-                )
-
-        if cfg.debug.write_evidence_manifest:
-            manifest_path = _timed_artifact_write(
-                write_evidence_manifest_json,
-                output_dir,
-                blur_fail_evidence_rows,
-                blur_pass_evidence_rows,
-                cfg.debug.evidence_frames_k,
-                blur_threshold if blur_threshold is not None else None,
-                cfg.sampling.rgb_stride,
-                cfg.sampling.max_rgb_frames,
-                cv2_available,
-                bool(annotated_fail_dir or annotated_pass_dir),
-            )
-            if manifest_path:
-                report["metrics"]["evidence_manifest_path"] = _relative_path(
-                    manifest_path, output_dir
-                )
+        for row in blur_rows:
+            if int(row.get("decode_ok", 0)) != 1:
+                continue
+            if row.get("blur_value") is None or row.get("blur_ok") is None:
+                continue
+            pos = int(row["sample_i"])
+            frame = rgb_frames_by_pos.get(pos)
+            if frame is None:
+                continue
+            evidence_row = {
+                "sample_i": pos,
+                "t_ms": float(row["t_ms"]),
+                "blur_value": float(row["blur_value"]),
+                "frame": frame,
+            }
+            if int(row["blur_ok"]) == 0:
+                blur_fail_evidence_rows.append(evidence_row)
+            else:
+                blur_pass_evidence_rows.append(evidence_row)
 
         sampled_imu_acc_cov = (
             [imu_acc_cov[idx] for idx in sampled_rgb_indices] if imu_acc_cov is not None else None
@@ -699,6 +638,8 @@ def analyze_file(
             [imu_gyro_cov[idx] for idx in sampled_rgb_indices] if imu_gyro_cov is not None else None
         )
         sync_available_globally = depth_timestamps_present and sampled_sync_deltas is not None
+        sync_sample_count = len(sampled_sync_deltas) if sampled_sync_deltas is not None else 0
+        report["metrics"]["sync_sample_count"] = sync_sample_count
         if not sync_available_globally and sampled_count > 0:
             errors.append(
                 _error(
@@ -709,6 +650,18 @@ def analyze_file(
                         "depth_topic_present": depth_topic_present,
                         "depth_timestamps_present": depth_timestamps_present,
                         "sampled_rgb_count": sampled_count,
+                    },
+                )
+            )
+        elif sync_sample_count < cfg.thresholds.sync_min_samples:
+            errors.append(
+                _error(
+                    "WARN",
+                    "SYNC_INSUFFICIENT_SAMPLES",
+                    "Sync evaluation sample count is below threshold.",
+                    {
+                        "sync_sample_count": sync_sample_count,
+                        "sync_min_samples": cfg.thresholds.sync_min_samples,
                     },
                 )
             )
@@ -771,39 +724,225 @@ def analyze_file(
             report["metrics"]["vision_coverage_seconds_est"] = None
         report["metrics"]["segments_basis"] = "integrity"
 
-        segments = extract_segments(
+        integrity_segments = extract_segments(
             sampled_times_ns=sampled_rgb_times_ns,
             frame_ok=frame_flags.frame_ok_integrity,
             max_gap_fill_ms=cfg.segments.max_gap_fill_ms,
             min_segment_seconds=cfg.segments.min_segment_seconds,
             forced_break_positions=force_bad_sample_positions,
         )
-        report["segments"] = segments
+        clean_ok_strict = [
+            bool(
+                frame_flags.sync_ok_warn[i]
+                and frame_flags.rgb_drop_ok[i]
+                and frame_flags.imu_ok[i]
+                and frame_flags.blur_ok[i]
+                and frame_flags.exposure_ok[i]
+                and frame_flags.depth_ok[i]
+            )
+            for i in range(sampled_count)
+        ]
+        clean_ok_nosync = [
+            bool(
+                frame_flags.rgb_drop_ok[i]
+                and frame_flags.imu_ok[i]
+                and frame_flags.blur_ok[i]
+                and frame_flags.exposure_ok[i]
+                and frame_flags.depth_ok[i]
+            )
+            for i in range(sampled_count)
+        ]
+        for forced_pos in force_bad_sample_positions:
+            if 0 <= forced_pos < sampled_count:
+                clean_ok_strict[forced_pos] = False
+                clean_ok_nosync[forced_pos] = False
+
+        clean_segments = extract_segments(
+            sampled_times_ns=sampled_rgb_times_ns,
+            frame_ok=clean_ok_strict,
+            max_gap_fill_ms=cfg.segments.max_gap_fill_ms,
+            min_segment_seconds=cfg.segments.min_segment_seconds,
+            forced_break_positions=force_bad_sample_positions,
+        )
+        clean_segments_nosync = extract_segments(
+            sampled_times_ns=sampled_rgb_times_ns,
+            frame_ok=clean_ok_nosync,
+            max_gap_fill_ms=cfg.segments.max_gap_fill_ms,
+            min_segment_seconds=cfg.segments.min_segment_seconds,
+            forced_break_positions=force_bad_sample_positions,
+        )
+        clean_segments_path = _timed_artifact_write(
+            write_clean_segments_json, clean_segments, output_dir, "clean_segments.json"
+        )
+        clean_segments_nosync_path = _timed_artifact_write(
+            write_clean_segments_json, clean_segments_nosync, output_dir, "clean_segments_nosync.json"
+        )
+        report["metrics"]["clean_segments_basis"] = "warn_strict_quality_mask"
+        report["metrics"]["clean_segments_path"] = _relative_path(clean_segments_path, output_dir)
+        report["metrics"]["clean_segments_nosync_path"] = _relative_path(
+            clean_segments_nosync_path, output_dir
+        )
+
+        report["segments"] = integrity_segments
         report["errors"] = errors
-        if sampled_sync_deltas is not None:
-            report["metrics"]["sync_sample_count"] = len(sampled_sync_deltas)
+        report["metrics"]["sync_pattern"] = classify_sync_pattern(report["metrics"], cfg)
+        report["metrics"]["sync_offset_estimate_ms"] = sync_offset_estimate_ms(report["metrics"])
 
         gate = evaluate_gate(
             config=cfg,
             metrics=report["metrics"],
             streams=report["streams"],
             duration_s=analyzed_duration_s,
-            segments=segments,
+            segments=integrity_segments,
             errors=errors,
+            clean_segments=clean_segments,
+            clean_segments_nosync=clean_segments_nosync,
         )
         report["gate"] = gate
+
+        blur_warn_trigger = "WARN_BLUR_FAIL_RATIO_GT_WARN" in gate["warn_reasons"]
+        should_export_evidence = cfg.debug.export_evidence_frames or (
+            cfg.debug.export_evidence_on_warn and blur_warn_trigger
+        )
+        blur_evidence_requested = (
+            should_export_evidence
+            or cfg.debug.write_annotated_evidence
+            or cfg.debug.write_evidence_manifest
+        )
+        exposure_reason_counts = report["metrics"].get("exposure_bad_reason_counts", {})
+        exposure_reason_total = 0
+        if isinstance(exposure_reason_counts, dict):
+            exposure_reason_total = int(sum(int(v) for v in exposure_reason_counts.values()))
+        pass_exposure_trigger = (
+            gate["gate"] == "PASS"
+            and exposure_reason_total > 0
+            and rgb_decode_success_count > 0
+        )
+        exposure_evidence_requested = should_export_evidence or pass_exposure_trigger
+
+        cv2_available = _cv2_available()
+        evidence_sample_positions: set[int] = set()
+        fail_dir = None
+        pass_dir = None
+        if blur_evidence_requested and cv2_available:
+            fail_sel, pass_sel = select_blur_evidence_rows(
+                blur_fail_evidence_rows, blur_pass_evidence_rows, cfg.debug.evidence_frames_k
+            )
+            fail_dir, pass_dir = _timed_artifact_write(
+                write_blur_evidence_frames,
+                blur_fail_evidence_rows,
+                blur_pass_evidence_rows,
+                output_dir,
+                cfg.debug.evidence_frames_k,
+            )
+            evidence_sample_positions.update(
+                int(row.get("sample_i", -1))
+                for row in (fail_sel + pass_sel)
+                if int(row.get("sample_i", -1)) >= 0
+            )
+        if blur_evidence_requested:
+            report["metrics"]["blur_fail_frames_dir"] = _relative_path(fail_dir, output_dir)
+            report["metrics"]["blur_pass_frames_dir"] = _relative_path(pass_dir, output_dir)
+
+        annotated_fail_dir = None
+        annotated_pass_dir = None
+        if cfg.debug.write_annotated_evidence and cv2_available:
+            annotated_fail_dir, annotated_pass_dir = _timed_artifact_write(
+                write_blur_annotated_evidence_frames,
+                blur_fail_evidence_rows,
+                blur_pass_evidence_rows,
+                output_dir,
+                cfg.debug.evidence_frames_k,
+                blur_threshold if blur_threshold is not None else None,
+            )
+            if annotated_fail_dir:
+                report["metrics"]["blur_fail_frames_annotated_dir"] = _relative_path(
+                    annotated_fail_dir, output_dir
+                )
+            if annotated_pass_dir:
+                report["metrics"]["blur_pass_frames_annotated_dir"] = _relative_path(
+                    annotated_pass_dir, output_dir
+                )
+
+        if cfg.debug.write_evidence_manifest:
+            manifest_path = _timed_artifact_write(
+                write_evidence_manifest_json,
+                output_dir,
+                blur_fail_evidence_rows,
+                blur_pass_evidence_rows,
+                cfg.debug.evidence_frames_k,
+                blur_threshold if blur_threshold is not None else None,
+                cfg.sampling.rgb_stride,
+                cfg.sampling.max_rgb_frames,
+                cv2_available,
+                bool(annotated_fail_dir or annotated_pass_dir),
+            )
+            if manifest_path:
+                report["metrics"]["evidence_manifest_path"] = _relative_path(
+                    manifest_path, output_dir
+                )
+
+        if exposure_evidence_requested and cv2_available:
+            exposure_k = cfg.debug.evidence_frames_k
+            if pass_exposure_trigger and not should_export_evidence:
+                exposure_k = max(cfg.thresholds.pass_exposure_evidence_k, exposure_reason_total)
+            selected_by_reason, selection_warnings = select_exposure_evidence_rows(
+                exposure_rows, exposure_k
+            )
+            for rows in selected_by_reason.values():
+                evidence_sample_positions.update(
+                    int(row.get("sample_i", -1)) for row in rows if int(row.get("sample_i", -1)) >= 0
+                )
+            exposure_dirs = _timed_artifact_write(
+                write_exposure_evidence_frames,
+                selected_by_reason,
+                rgb_frames_by_pos,
+                output_dir,
+            )
+            report["metrics"]["exposure_low_clip_frames_dir"] = _relative_path(
+                exposure_dirs.get("low_clip"), output_dir
+            )
+            report["metrics"]["exposure_high_clip_frames_dir"] = _relative_path(
+                exposure_dirs.get("high_clip"), output_dir
+            )
+            report["metrics"]["exposure_flat_and_dark_frames_dir"] = _relative_path(
+                exposure_dirs.get("flat_and_dark"), output_dir
+            )
+            report["metrics"]["exposure_flat_and_bright_frames_dir"] = _relative_path(
+                exposure_dirs.get("flat_and_bright"), output_dir
+            )
+            exposure_error_path = _timed_artifact_write(
+                write_exposure_evidence_error, selection_warnings, output_dir
+            )
+            report["metrics"]["exposure_evidence_error_path"] = _relative_path(
+                exposure_error_path, output_dir
+            )
+
         pass2_total = perf_counter() - pass2_start
         phase_durations_s["pass2"] = max(0.0, pass2_total - phase_durations_s["artifacts"])
 
         preview_paths: list[str] = []
         if cfg.debug.export_preview_frames:
-            preview_paths = _timed_artifact_write(write_rgb_previews, rgb_frames_by_pos, output_dir)
+            preview_paths = _timed_artifact_write(
+                write_rgb_previews,
+                rgb_frames_by_pos,
+                output_dir,
+                12,
+                evidence_sample_positions,
+            )
+        preview_relpaths = sorted(
+            [
+                rel
+                for rel in (_relative_path(path, output_dir) for path in preview_paths)
+                if rel is not None
+            ]
+        )
+        report["metrics"]["preview_relpaths"] = preview_relpaths
+        report["metrics"]["preview_count"] = len(preview_relpaths)
         plot_path = _timed_artifact_write(write_sync_histogram, sampled_sync_deltas, output_dir)
         drop_timeline_path = _timed_artifact_write(
             write_drop_timeline, rgb_col.times_ms, rgb_gap["gap_intervals_ms"], output_dir
         )
-        if preview_paths:
-            report["metrics"]["preview_count"] = len(preview_paths)
         if plot_path:
             report["metrics"]["sync_histogram_path"] = _relative_path(plot_path, output_dir)
         if drop_timeline_path:
