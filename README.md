@@ -23,7 +23,7 @@ pip install -e ".[dev]"
 ## Analyze
 
 ```bash
-egologqa analyze \
+EgoLogQA analyze \
   --input /path/to/file.mcap \
   --output out/run1 \
   --config configs/microagi00_ros2.yaml
@@ -78,7 +78,7 @@ All artifact paths stored in `report.json` are output-directory-relative POSIX p
 
 Optional additive diagnostics:
 
-- `egologqa analyze --bench ...` writes benchmark timings to `debug/benchmarks.json`.
+- `EgoLogQA analyze --bench ...` writes benchmark timings to `debug/benchmarks.json`.
 - `debug.write_evidence_manifest` writes a deterministic evidence manifest.
 - `debug.write_annotated_evidence` writes annotated evidence copies without modifying raw evidence frames.
 
@@ -154,8 +154,8 @@ Defaults:
 - HF dataset id: `MicroAGI-Labs/MicroAGI00`
 - HF revision: `main`
 - HF prefix: `raw_mcaps/`
-- HF cache dir: `~/.cache/egologqa/hf_mcaps`
-- Runs dir: `~/.cache/egologqa/runs`
+- HF cache dir: `~/.cache/EgoLogQA/hf_mcaps`
+- Runs dir: `~/.cache/EgoLogQA/runs`
 
 Env overrides:
 

@@ -55,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-root", default="validation")
     parser.add_argument(
         "--cache-dir",
-        default=str(Path("~/.cache/egologqa/hf_mcaps").expanduser()),
+        default=str(Path("~/.cache/EgoLogQA/hf_mcaps").expanduser()),
     )
     parser.add_argument("--token", default=None)
     args = parser.parse_args(argv)

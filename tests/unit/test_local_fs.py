@@ -43,7 +43,7 @@ def test_too_many_files_limit(tmp_path: Path) -> None:
 
 def test_missing_directory_raises() -> None:
     with pytest.raises(LocalDirNotFound):
-        list_mcap_files_in_dir("~/this/path/does/not/exist/for/egologqa")
+        list_mcap_files_in_dir("~/this/path/does/not/exist/for/EgoLogQA")
 
 
 def test_unreadable_directory_raises(monkeypatch, tmp_path: Path) -> None:

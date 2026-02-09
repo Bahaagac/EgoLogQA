@@ -11,7 +11,7 @@ from egologqa.report import empty_report, git_commit_or_unknown, write_report_js
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="egologqa")
+    parser = argparse.ArgumentParser(prog="EgoLogQA")
     sub = parser.add_subparsers(dest="command")
     analyze = sub.add_parser("analyze", help="Analyze an MCAP file.")
     analyze.add_argument("--input", required=True, help="Path to MCAP file.")

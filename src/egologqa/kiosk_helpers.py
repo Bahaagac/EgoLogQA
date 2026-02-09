@@ -11,7 +11,7 @@ from typing import Any
 def resolve_runs_base_dir(env_value: str | None) -> Path:
     if env_value and env_value.strip():
         return Path(env_value).expanduser()
-    return Path.home() / ".cache" / "egologqa" / "runs"
+    return Path.home() / ".cache" / "EgoLogQA" / "runs"
 
 
 def sanitize_component(text: str) -> str:
@@ -51,7 +51,7 @@ def write_latest_run_pointer(base_dir: Path, run_dir: Path) -> Path:
 
 def ensure_writable_dir(path: Path, label: str) -> Path:
     path.mkdir(parents=True, exist_ok=True)
-    probe = path / ".egologqa_write_probe"
+    probe = path / ".EgoLogQA_write_probe"
     try:
         probe.write_text("ok", encoding="utf-8")
     except OSError as exc:

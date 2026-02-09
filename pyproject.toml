@@ -1,5 +1,5 @@
 [project]
-name = "egologqa"
+name = "EgoLogQA"
 version = "0.1.0"
 description = "Deterministic QC gate and segment extractor for ROS2 MCAP logs."
 readme = "README.md"
@@ -19,6 +19,7 @@ dev = [
 ]
 
 [project.scripts]
+EgoLogQA = "egologqa.cli:main"
 egologqa = "egologqa.cli:main"
 
 [build-system]

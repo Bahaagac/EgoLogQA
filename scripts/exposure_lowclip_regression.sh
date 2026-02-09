@@ -3,6 +3,10 @@ set -euo pipefail
 
 REPO="${REPO:-$(pwd)}"
 PY="${PY:-$REPO/.venv/bin/python}"
+CLI="${CLI:-$REPO/.venv/bin/EgoLogQA}"
+if [ ! -x "$CLI" ] && [ -x "$REPO/.venv/bin/egologqa" ]; then
+    CLI="$REPO/.venv/bin/egologqa"
+fi
 CFG="${CFG:-$REPO/configs/microagi00_ros2.yaml}"
 LIST="${LIST:-$REPO/qa_mcap_list.txt}"
 BASELINE_ROOT="${BASELINE_ROOT:-$REPO/baselines}"
@@ -54,7 +58,7 @@ run_phase() {
         out="$root/$stem"
         mkdir -p "$out"
         log "[$phase] analyze: $mcap"
-        "$PY" -m egologqa analyze --input "$mcap" --config "$CFG" --output "$out" >"$out/analyze.log" 2>&1
+        "$CLI" analyze --input "$mcap" --config "$CFG" --output "$out" >"$out/analyze.log" 2>&1
         report="$out/report.json"
         [ -f "$report" ] || fail "[$phase] missing report.json: $report"
     done < "$LIST"

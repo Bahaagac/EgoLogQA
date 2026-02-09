@@ -54,7 +54,7 @@ def sanitize_json_value(value: Any) -> Any:
 def empty_report(input_path: str, file_size_bytes: int | None = None, commit: str = "unknown") -> dict[str, Any]:
     return {
         "tool": {
-            "name": "egologqa",
+            "name": "EgoLogQA",
             "version": __version__,
             "git_commit": commit,
         },

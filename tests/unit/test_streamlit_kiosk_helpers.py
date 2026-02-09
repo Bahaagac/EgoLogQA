@@ -20,7 +20,7 @@ from egologqa.kiosk_helpers import (
 
 def test_resolve_runs_base_dir_default_and_override() -> None:
     default_dir = resolve_runs_base_dir(None)
-    assert str(default_dir).endswith(".cache/egologqa/runs")
+    assert str(default_dir).endswith(".cache/EgoLogQA/runs")
     override = resolve_runs_base_dir("~/custom_runs")
     assert override == Path("~/custom_runs").expanduser()
 
