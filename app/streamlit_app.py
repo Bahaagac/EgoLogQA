@@ -267,6 +267,62 @@ def _fmt(v: Any) -> str:
     return str(v)
 
 
+def _as_float(v: Any) -> float | None:
+    if v is None:
+        return None
+    try:
+        out = float(v)
+    except (TypeError, ValueError):
+        return None
+    if out != out:
+        return None
+    return out
+
+
+def _fmt_bytes_gib(size_bytes: Any) -> str:
+    value = _as_float(size_bytes)
+    if value is None or value < 0.0:
+        return "--"
+    return f"{value / (1024 ** 3):.2f}"
+
+
+def _fmt_seconds(seconds: Any) -> str:
+    value = _as_float(seconds)
+    if value is None or value < 0.0:
+        return "--"
+    return f"{value:.3f}"
+
+
+def _fmt_mbps(mbps: Any) -> str:
+    value = _as_float(mbps)
+    if value is None or value < 0.0:
+        return "--"
+    return f"{value:.3f}"
+
+
+def _topic_rate_hz(stats: Any) -> float | None:
+    if not isinstance(stats, dict):
+        return None
+    hz = _as_float(stats.get("approx_rate_hz"))
+    if hz is not None and hz >= 0.0:
+        return hz
+    duration_s = _as_float(stats.get("duration_s"))
+    try:
+        msg_count = int(stats.get("message_count"))
+    except (TypeError, ValueError):
+        return None
+    if duration_s is None or duration_s <= 0.0 or msg_count < 2:
+        return None
+    return float((msg_count - 1) / duration_s)
+
+
+def _fmt_hz(hz: Any) -> str:
+    value = _as_float(hz)
+    if value is None or value < 0.0:
+        return "--"
+    return f"{value:.3f}"
+
+
 def _sec_label(text: str) -> None:
     st.markdown(f'<p class="eq-sec">{html.escape(text)}</p>', unsafe_allow_html=True)
 
@@ -342,6 +398,15 @@ REASON_DESCRIPTIONS: dict[str, str] = {
 }
 
 
+def _r2(v: Any) -> str:
+    """Round a value to 2 decimal places for display; pass non-floats through."""
+    if isinstance(v, float):
+        return f"{v:.2f}"
+    if v is None:
+        return "N/A"
+    return str(v)
+
+
 def _format_reason_context(code: str, report: dict[str, Any]) -> str:
     metrics = report.get("metrics", {})
     streams = report.get("streams", {})
@@ -357,52 +422,52 @@ def _format_reason_context(code: str, report: dict[str, Any]) -> str:
         return f"rgb_timestamps_present={streams.get('rgb_timestamps_present')}"
     if code in {"FAIL_SYNC_P95_GT_FAIL", "WARN_SYNC_P95_GT_WARN"}:
         return (
-            f"sync_p95_ms={metrics.get('sync_p95_ms')} "
-            f"(warn={thresholds.get('sync_warn_ms')}, fail={thresholds.get('sync_fail_ms')})"
+            f"sync_p95_ms={_r2(metrics.get('sync_p95_ms'))} "
+            f"(warn={_r2(thresholds.get('sync_warn_ms'))}, fail={_r2(thresholds.get('sync_fail_ms'))})"
         )
     if code == "WARN_SYNC_JITTER_P95_GT_WARN":
         return (
-            f"sync_jitter_p95_ms={metrics.get('sync_jitter_p95_ms')} "
-            f"(warn={thresholds.get('sync_jitter_warn_ms')})"
+            f"sync_jitter_p95_ms={_r2(metrics.get('sync_jitter_p95_ms'))} "
+            f"(warn={_r2(thresholds.get('sync_jitter_warn_ms'))})"
         )
     if code == "WARN_SYNC_DRIFT_ABS_GT_WARN":
         return (
-            f"sync_drift_ms_per_min={metrics.get('sync_drift_ms_per_min')} "
-            f"(abs warn={thresholds.get('sync_drift_warn_ms_per_min')})"
+            f"sync_drift_ms_per_min={_r2(metrics.get('sync_drift_ms_per_min'))} "
+            f"(abs warn={_r2(thresholds.get('sync_drift_warn_ms_per_min'))})"
         )
     if code == "FAIL_DROP_RATIO_GT_FAIL":
-        return f"drop_ratio={metrics.get('drop_ratio')} (fail={thresholds.get('drop_fail_ratio')})"
+        return f"drop_ratio={_r2(metrics.get('drop_ratio'))} (fail={_r2(thresholds.get('drop_fail_ratio'))})"
     if code == "WARN_DROP_RATIO_GT_WARN":
-        return f"drop_ratio={metrics.get('drop_ratio')} (warn={thresholds.get('drop_warn_ratio')})"
+        return f"drop_ratio={_r2(metrics.get('drop_ratio'))} (warn={_r2(thresholds.get('drop_warn_ratio'))})"
     if code == "WARN_IMU_MISSING_RATIO_GT_WARN":
         return (
-            f"imu_combined_missing_ratio={metrics.get('imu_combined_missing_ratio')} "
-            f"(warn={thresholds.get('imu_missing_warn_ratio')})"
+            f"imu_combined_missing_ratio={_r2(metrics.get('imu_combined_missing_ratio'))} "
+            f"(warn={_r2(thresholds.get('imu_missing_warn_ratio'))})"
         )
     if code == "WARN_BLUR_FAIL_RATIO_GT_WARN":
         return (
-            f"blur_fail_ratio={metrics.get('blur_fail_ratio')} "
-            f"(warn={thresholds.get('blur_fail_warn_ratio')})"
+            f"blur_fail_ratio={_r2(metrics.get('blur_fail_ratio'))} "
+            f"(warn={_r2(thresholds.get('blur_fail_warn_ratio'))})"
         )
     if code == "WARN_EXPOSURE_BAD_RATIO_GT_WARN":
         return (
-            f"exposure_bad_ratio={metrics.get('exposure_bad_ratio')} "
-            f"(warn={thresholds.get('exposure_bad_warn_ratio')})"
+            f"exposure_bad_ratio={_r2(metrics.get('exposure_bad_ratio'))} "
+            f"(warn={_r2(thresholds.get('exposure_bad_warn_ratio'))})"
         )
     if code == "FAIL_DEPTH_FAIL_RATIO_GT_FAIL":
         return (
-            f"depth_fail_ratio={metrics.get('depth_fail_ratio')} "
-            f"(fail={thresholds.get('depth_fail_ratio_fail')})"
+            f"depth_fail_ratio={_r2(metrics.get('depth_fail_ratio'))} "
+            f"(fail={_r2(thresholds.get('depth_fail_ratio_fail'))})"
         )
     if code == "FAIL_DEPTH_INVALID_MEAN_GT_FAIL":
         return (
-            f"depth_invalid_mean={metrics.get('depth_invalid_mean')} "
-            f"(fail={thresholds.get('depth_invalid_mean_fail')})"
+            f"depth_invalid_mean={_r2(metrics.get('depth_invalid_mean'))} "
+            f"(fail={_r2(thresholds.get('depth_invalid_mean_fail'))})"
         )
     if code == "WARN_DEPTH_INVALID_MEAN_GT_WARN":
         return (
-            f"depth_invalid_mean={metrics.get('depth_invalid_mean')} "
-            f"(warn={thresholds.get('depth_invalid_mean_warn')})"
+            f"depth_invalid_mean={_r2(metrics.get('depth_invalid_mean'))} "
+            f"(warn={_r2(thresholds.get('depth_invalid_mean_warn'))})"
         )
     if code == "WARN_DEPTH_TIMESTAMP_MISSING":
         return f"depth_timestamps_present={streams.get('depth_timestamps_present')}"
@@ -555,6 +620,7 @@ _AF_KEYS = list(_AF.keys())
 def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
     st.markdown("---")
     metrics = report.get("metrics", {})
+    streams = report.get("streams", {})
     gate = report.get("gate", {})
     gate_name = gate.get("gate")
     fail_reasons = gate.get("fail_reasons", [])
@@ -597,8 +663,62 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
         _sec_label("Warning Reasons")
         _render_reason_cards("WARNING", warn_reasons, report)
 
-    # ━━ 2. KEY NUMBERS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    _sec_label("Key Numbers")
+    topic_stats = streams.get("topic_stats", {})
+    topic_stats_map = topic_stats if isinstance(topic_stats, dict) else {}
+    file_size_bytes = report.get("input", {}).get("file_size_bytes")
+    file_duration_s = metrics.get("file_duration_s")
+    if file_duration_s is None:
+        file_duration_s = report.get("time", {}).get("duration_s")
+
+    file_bitrate_mbps = metrics.get("file_bitrate_mbps")
+    if file_bitrate_mbps is None:
+        file_size_float = _as_float(file_size_bytes)
+        file_duration_float = _as_float(file_duration_s)
+        if (
+            file_size_float is not None
+            and file_duration_float is not None
+            and file_duration_float > 0.0
+        ):
+            file_bitrate_mbps = (file_size_float * 8.0) / (file_duration_float * 1_000_000.0)
+
+    rgb_topic = streams.get("rgb_topic")
+    depth_topic = streams.get("depth_topic")
+    imu_accel_topic = streams.get("imu_accel_topic")
+    imu_gyro_topic = streams.get("imu_gyro_topic")
+    rgb_stats = topic_stats_map.get(rgb_topic) if isinstance(rgb_topic, str) else None
+    depth_stats = topic_stats_map.get(depth_topic) if isinstance(depth_topic, str) else None
+    rgb_rate_hz = _topic_rate_hz(rgb_stats)
+    depth_rate_hz = _topic_rate_hz(depth_stats)
+
+    imu_rates: list[float] = []
+    imu_topics_seen: set[str] = set()
+    for imu_topic in [imu_accel_topic, imu_gyro_topic]:
+        if not isinstance(imu_topic, str) or not imu_topic or imu_topic in imu_topics_seen:
+            continue
+        imu_topics_seen.add(imu_topic)
+        rate = _topic_rate_hz(topic_stats_map.get(imu_topic))
+        if rate is not None:
+            imu_rates.append(rate)
+    imu_rate_hz = float(sum(imu_rates) / len(imu_rates)) if imu_rates else None
+
+    # ━━ 2. FILE KEY NUMBERS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    _sec_label("File Key Numbers")
+    f1, f2, f3, f4, f5, f6 = st.columns(6)
+    with f1:
+        st.metric("FILE SIZE (GiB)", _fmt_bytes_gib(file_size_bytes))
+    with f2:
+        st.metric("DURATION (s)", _fmt_seconds(file_duration_s))
+    with f3:
+        st.metric("AVG BITRATE (Mbps)", _fmt_mbps(file_bitrate_mbps))
+    with f4:
+        st.metric("RGB RATE (Hz)", _fmt_hz(rgb_rate_hz))
+    with f5:
+        st.metric("DEPTH RATE (Hz)", _fmt_hz(depth_rate_hz))
+    with f6:
+        st.metric("IMU RATE (Hz)", _fmt_hz(imu_rate_hz))
+
+    # ━━ 3. KEY NUMBERS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    _sec_label("Analysis Key Numbers")
     m1, m2, m3, m4, m5, m6 = st.columns(6)
     with m1:
         st.metric("Sync P95", _fmt(metrics.get("sync_p95_ms")))
@@ -613,7 +733,7 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
     with m6:
         st.metric("Exposure Bad", _fmt(metrics.get("exposure_bad_ratio")))
 
-    # ━━ 3. SEGMENTS (side by side) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ━━ 4. SEGMENTS (side by side) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     _sec_label("Segments")
     _help("Integrity segments use core timing; clean segments add blur, exposure, and depth checks.")
 
@@ -639,7 +759,7 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
         else:
             st.caption("None produced.")
 
-    # ━━ 4. CORE METRICS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ━━ 5. CORE METRICS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     _sec_label("Core Metrics")
     _help("Main quality numbers. Lower sync/drop and higher coverage is better.")
     rows = _metrics_df(metrics, [
@@ -654,7 +774,7 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
     else:
         st.caption("No data.")
 
-    # ━━ 5. SYNC DIAGNOSTICS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ━━ 6. SYNC DIAGNOSTICS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     _sec_label("Sync Diagnostics")
     _help("Timing details between RGB and depth. Positive offset = depth later than RGB.")
     rows = _metrics_df(metrics, [
@@ -669,7 +789,7 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
     else:
         st.caption("No diagnostics available.")
 
-    # ━━ 6. EXPOSURE / BLUR / DEPTH ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ━━ 7. EXPOSURE / BLUR / DEPTH ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     _sec_label("Exposure / Blur / Depth")
     _help("Image/depth quality from sampled frames (not every frame in the MCAP).")
     rows = _metrics_df(metrics, [
@@ -685,7 +805,7 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
     else:
         st.caption("No data.")
 
-    # ━━ 7. EXPOSURE REASON COUNTS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ━━ 8. EXPOSURE REASON COUNTS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     _sec_label("Exposure Reason Counts")
     _help("How many sampled frames matched each exposure issue type.")
     exp_counts = metrics.get("exposure_bad_reason_counts", {})
@@ -703,7 +823,7 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
         "clipped highlight area is above the high-clip threshold."
     )
 
-    # ━━ 8. ERRORS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ━━ 9. ERRORS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     _sec_label("Errors")
     _help("Warnings and errors recorded during analysis.")
     errors = report.get("errors", [])
@@ -712,7 +832,7 @@ def _render_full_results(report: dict[str, Any], output_dir: Path) -> None:
     else:
         st.info("No errors recorded.")
 
-    # ━━ 9. ARTIFACTS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    # ━━ 10. ARTIFACTS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     _sec_label("Artifacts")
     _help("Generated files you can open for deeper review.")
     af_parts: list[str] = []

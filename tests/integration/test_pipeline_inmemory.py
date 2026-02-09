@@ -90,6 +90,9 @@ def test_pipeline_inmemory_smoke(tmp_path: Path) -> None:
     assert "rgb_decode_success_count" in result.report["metrics"]
     assert "depth_decode_attempt_count" in result.report["metrics"]
     assert "depth_decode_success_count" in result.report["metrics"]
+    assert "file_total_messages" in result.report["metrics"]
+    assert "file_duration_s" in result.report["metrics"]
+    assert "file_bitrate_mbps" in result.report["metrics"]
     assert "blur_valid_frame_count" in result.report["metrics"]
     assert "exposure_valid_frame_count" in result.report["metrics"]
     assert "depth_valid_frame_count" in result.report["metrics"]
@@ -98,6 +101,7 @@ def test_pipeline_inmemory_smoke(tmp_path: Path) -> None:
     assert "blur_p90" in result.report["metrics"]
     assert "exposure_bad_first_sample_i" in result.report["metrics"]
     assert "exposure_bad_last_sample_i" in result.report["metrics"]
+    assert result.report["metrics"]["file_total_messages"] == len(records)
     if result.report["errors"]:
         first = result.report["errors"][0]
         assert set(first.keys()) == {"severity", "code", "message", "context"}
